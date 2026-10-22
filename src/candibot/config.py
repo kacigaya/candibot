@@ -99,6 +99,7 @@ def load(path: Path) -> Config:
             availability=a.get("availability", ""),
             salaryMonthly=float(a.get("salary_monthly", 0)),
             salaryText=a.get("salary_text", ""),
+            phone=a.get("phone", "").strip(),
         ),
         root=root,
         candidate=Candidate(

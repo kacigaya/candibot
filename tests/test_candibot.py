@@ -172,6 +172,7 @@ def testDashboardEscapesOfferTextAndSkipsExcludedScores(tmp_path):
     assert "<title>0 : 0</title>" not in page  # note 0 fictive des écoles exclues
     assert "<title>9 : 1</title>" in page
     assert "✗ échec</span> : aucune offre trouvée" in page
+    assert "Passages arrêtés ?" in page  # dernier passage le 01/10, page générée aujourd'hui
     # 07:30 UTC le 1er octobre = 09:30 à Paris (heure d'été).
     assert "01/10/2026 09:30" in page
 
@@ -283,6 +284,54 @@ def testIsListedMatchesTitleAndCompanyOnTheSameCard():
     assert application.isListed(cards, "Chargé de Communication H/F", "Entreprise anonyme")
 
 
+def testIsListedToleratesCompanyNameVariants():
+    # Relevé le 22/10/2026 : la liste ne reprend pas toujours le nom de la fiche.
+    cards = [
+        "Envoyée\nAlternant Assistant Marketing Digital H/F\n\nSARL LE LU\n\nParis - 75",
+        "Envoyée\nAlternant Chargé de Communication H/F\n\nOnet Airport Services\n\nRoissy-en-France - 95",
+    ]
+    assert application.isListed(cards, "Alternant Assistant Marketing Digital H/F", "Lelu France")
+    assert application.isListed(cards, "Alternant Chargé de Communication H/F", "Groupe ONET")
+    # Les mots courants ne suffisent pas : « Groupe » ou « France » seuls ne désignent personne.
+    assert not application.isListed(cards, "Alternant Chargé de Communication H/F", "Groupe Paris France")
+    # Un mot du titre ne vaut pas nom d'entreprise.
+    analyst = ["Envoyée\nBusiness Analyst H/F\n\nContoso\n\nOrange - 84"]
+    assert not application.isListed(analyst, "Business Analyst H/F", "Orange Business")
+    # Le lieu ne vaut pas nom d'entreprise, et un titre plus long n'est pas le même poste.
+    assert not application.isListed(analyst, "Analyst H/F", "Contoso")
+    # Un seul mot en commun ne fait pas la même entreprise.
+    decision = ["Envoyée\nBusiness Analyst H/F\n\nBusiness & Decision\n\nLyon - 69"]
+    assert not application.isListed(decision, "Business Analyst H/F", "Orange Business")
+    # Un sigle court doit être identique : « AI » n'est pas « Mistral AI ».
+    short = ["Envoyée\nData Scientist H/F\n\nMistral AI\n\nParis - 75"]
+    assert not application.isListed(short, "Data Scientist H/F", "AI")
+    assert application.isListed(
+        ["Envoyée\nData Scientist H/F\n\nAI\n\nParis - 75"], "Data Scientist H/F", "AI"
+    )
+
+
+def testClaimTakesADraftOnlyOnce(tmp_path):
+    store = Store(tmp_path / "db.sqlite")
+    store.add(hellowork.parseOffer("1", offerPage()))
+    store.scored("1", 9, "bon profil", "Bonjour", minScore=7)
+    assert store.claim("1", "envoi en cours") == "needs_review"
+    assert store.claim("1", "envoi en cours") is None  # un second passage ne la renvoie pas
+    assert store.counts() == {"needs_review": 1}
+    store.close()
+
+
+def testClaimRejectsACopyClaimedByAnotherRun(tmp_path):
+    first, second = Store(tmp_path / "db.sqlite"), Store(tmp_path / "db.sqlite")
+    for offerId in ("1", "2"):  # la même annonce sous deux identifiants
+        first.add(hellowork.parseOffer(offerId, offerPage()))
+        first.scored(offerId, 9, "bon profil", "Bonjour", minScore=7)
+    assert first.claim("1", "envoi en cours") == "needs_review"
+    assert second.claim("2", "envoi en cours") == "rejected"  # autre connexion, autre passage
+    assert second.counts() == {"needs_review": 1, "rejected": 1}
+    first.close()
+    second.close()
+
+
 def answers():
     from candibot.questions import Answers
 
@@ -322,6 +371,21 @@ def testSchoolQuestionsAndUnknownQuestions():
     assert answer("Souhaitez-vous rejoindre le CFA ITIS *", yesNo, answers()) == SCHOOL
     assert answer("Voulez-vous intégrer notre formation Bachelor ?", yesNo, answers()) == SCHOOL
     assert answer("Avez-vous le permis B ?", yesNo, answers()) is None
+    # Relevé sur une annonce « Centre de formation » : la question vient après le cursus.
+    assert answer("Quel campus souhaitez-vous intégrer ?", yesNo, answers()) == SCHOOL
+    assert answer("Quelle formation souhaitez-vous suivre ?", yesNo, answers()) == SCHOOL
+    assert answer("Quel poste souhaitez-vous intégrer ?", yesNo, answers()) is None
+
+
+def testPhoneAnswerComesFromConfigOnly():
+    from candibot.questions import Answers, answer
+
+    assert answer("Téléphone", None, Answers("", "", 0, "", "06 12 34 56 78")) == "06 12 34 56 78"
+    assert answer("Téléphone", None, Answers("", "", 0, "")) is None
+    withPhone = Answers("", "", 0, "", "06 12 34 56 78")
+    assert answer("Numéro de portable", None, withPhone) == "06 12 34 56 78"
+    assert answer("Êtes-vous mobile ?", None, withPhone) is None
+    assert answer("Avez-vous un ordinateur portable ?", None, withPhone) is None
 
 
 def testSearchUrlRepeatsContractFilter():
@@ -431,6 +495,71 @@ def testEditTextUsesEditorFromEnvironment(monkeypatch):
     monkeypatch.setattr(cli.subprocess, "run", fakeRun)
     assert cli.editText("Bonjour") == "Bonjour modifié"
     assert calls == ["vim"]
+
+
+def testDuplicateOfMatchesSameTitleCompanyAndPlace(tmp_path):
+    store = Store(tmp_path / "db.sqlite")
+    for offerId in ("1", "2", "3"):
+        store.add(hellowork.parseOffer(offerId, offerPage()))
+    store.setStatus("1", "applied")
+    store.setStatus("3", "rejected")
+    assert store.duplicateOf("2", ("applied", "needs_review")) == "1"
+    assert store.duplicateOf("1", ("applied", "needs_review")) is None  # jamais soi-même
+    assert store.duplicateOf("2", ("drafted",)) is None
+    other = dataclasses.replace(hellowork.parseOffer("4", offerPage()), location="Lyon 69001")
+    store.add(other)
+    assert store.duplicateOf("4", ("applied",)) is None
+    # Même intitulé au même endroit, mais un autre poste : le texte les départage.
+    distinct = dataclasses.replace(
+        hellowork.parseOffer("5", offerPage()), description="Poste en entrepôt, horaires de nuit."
+    )
+    store.add(distinct)
+    assert store.duplicateOf("5", ("applied",)) is None
+    store.close()
+
+
+def testSendSkipsCopiesOfAnOfferAlreadySent(tmp_path, monkeypatch):
+    import asyncio
+
+    from candibot import cli
+
+    store = Store(tmp_path / "db.sqlite")
+    for offerId in ("1", "2"):
+        store.add(hellowork.parseOffer(offerId, offerPage()))
+        store.scored(offerId, 9, "bon profil", "Bonjour", minScore=7)
+    sent = []
+
+    async def fakeApply(session, page, url, **kwargs):
+        sent.append(url)
+        return application.ApplyResult("applied", "vérifiée")
+
+    monkeypatch.setattr(cli.application, "apply", fakeApply)
+    monkeypatch.setattr(cli, "notify", lambda *args: None)
+    cfg = type("Cfg", (), {})()
+    cfg.dataDir = tmp_path
+    # Une seule candidature permise : le doublon écarté ne doit pas la consommer.
+    store.add(dataclasses.replace(hellowork.parseOffer("3", offerPage()), title="Autre poste H/F"))
+    store.scored("3", 8, "bon profil", "Bonjour", minScore=7)
+    cfg.search = Search([], "", ("CDI",), 1, 7, 1, 1, (0, 0), ())
+    cfg.candidate = type("C", (), {"firstName": "", "lastName": "", "email": "", "cvPdf": None})()
+    cfg.answers = None
+    store.setStatus("1", "applied")  # déjà envoyée lors d'un passage précédent
+    asyncio.run(cli.sendApplications(None, None, cfg, store))
+    assert sent == [hellowork.offerUrl("3")]
+    statuses = store.counts()
+    assert statuses == {"applied": 2, "rejected": 1}
+    duplicate = [r for r in store.byStatus("rejected")][0]
+    assert duplicate["detail"].startswith("doublon de l'offre ")
+    store.close()
+
+
+def testLastRunLineWarnsWhenTimerLooksStopped():
+    from candibot import cli
+
+    now = datetime(2026, 10, 22, 12, tzinfo=UTC)
+    assert cli.lastRunLine(None, now) == "dernier passage : aucun enregistré"
+    assert "vérifiez le timer" not in cli.lastRunLine("2026-10-22T07:30:00+00:00", now)
+    assert "vérifiez le timer" in cli.lastRunLine("2026-10-12T07:30:00+00:00", now)
 
 
 def testRetryRequeuesOnlyFailedOrUnconfirmedOffers(tmp_path):

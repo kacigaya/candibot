@@ -46,6 +46,8 @@ availability = "immédiate"
 # (service-public.gouv.fr). Exemple : 100 % du SMIC brut, 1 867,02 €/mois en 2026.
 salary_monthly = 0          # ex. 1867.02
 salary_text = ""            # ex. "100 % du SMIC"
+# Numéro donné aux recruteurs qui le demandent. Vide : ces offres passent en needs_review.
+phone = ""                  # ex. "06 12 34 56 78"
 
 [llm]
 # Modèles gratuits d'OpenCode (liste : `opencode models opencode`), essayés dans l'ordre.

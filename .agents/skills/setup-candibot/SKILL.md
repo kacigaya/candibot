@@ -11,7 +11,7 @@ Pose les questions à l'utilisateur, puis écris `config.toml` à partir de `con
 
 - Parle dans la langue de l'utilisateur. Pose 3 ou 4 questions par message, pas plus.
 - Propose des valeurs par défaut seulement pour les réglages techniques (`pages`, `min_score`, `max_scored`, `max_applications`, `pause_seconds`, `exclude_companies`, `llm.models`).
-- Demande toujours les données personnelles : identité, email, civilité, disponibilité, salaire. Les valeurs de `config.example.toml` (`Madame`, `immédiate`, montant du SMIC) sont des exemples, pas des réponses. N'invente rien. Un champ facultatif sans réponse reste vide.
+- Demande toujours les données personnelles : identité, email, civilité, disponibilité, salaire, téléphone. Les valeurs de `config.example.toml` (`Madame`, `immédiate`, montant du SMIC) sont des exemples, pas des réponses. N'invente rien. Un champ facultatif sans réponse reste vide.
 - Ne demande jamais la clé AgentMail dans la conversation. L'utilisateur la saisit lui-même dans son terminal (étape 7).
 - Ne remplace jamais un fichier existant (`config.toml`, `.env`, CV) sans l'accord de l'utilisateur.
 - `config.toml`, `.env` et `data/` sont ignorés par Git. Ne les ajoute jamais à un commit.
@@ -57,6 +57,7 @@ Pose les questions à l'utilisateur, puis écris `config.toml` à partir de `con
    - types de contrat (`contracts`, obligatoire) : un ou plusieurs parmi `CDI`, `CDD`, `Intérim`, `Stage`, `Alternance`, `Indépendant`, `Freelance`, `Franchise`, `Associé`, `Fonctionnaire`, `Stage de lycée`. Écris les valeurs exactement ainsi. Plusieurs contrats donnent les offres de chacun ;
    - `exclude_companies` écarte les écoles qui recrutent pour leur cursus. Garde la liste en alternance et en stage. Pour des CDI ou CDD seulement, propose de la vider. Propose d'ajouter des écoles si l'utilisateur en connaît ;
    - civilité (`civility`) : texte exact de l'option HelloWork, `Madame` ou `Monsieur` ;
+   - téléphone (`phone`, facultatif) : certains recruteurs l'exigent. Vide, ces offres passent en `needs_review` ;
    - salaire brut mensuel visé (`salary_monthly`, nombre) et réponse libre (`salary_text`). En alternance, le minimum légal dépend de l'âge et de l'année de formation : renvoie l'utilisateur vers service-public.gouv.fr s'il ne connaît pas son montant.
 
    **Disponibilité.** Déduis les deux champs de la même réponse de l'étape 4, puis confirme-les avec l'utilisateur :

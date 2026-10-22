@@ -26,7 +26,7 @@
 - Rédige un message de 120 à 200 mots au recruteur, à partir des seuls faits de votre CV
 - Remplit et envoie le formulaire HelloWork étape par étape, avec des mouvements de souris humains (seulement avec `--send`)
 - Consulte la page « Mes candidatures » avant et après chaque envoi, pour ne jamais postuler deux fois
-- Répond aux questions courantes des recruteurs : civilité, disponibilité et salaire
+- Répond aux questions courantes des recruteurs : civilité, disponibilité, salaire et téléphone
 - Envoie par email une confirmation par candidature et un récapitulatif du passage, via [AgentMail](https://docs.agentmail.to)
 - Tourne une fois par jour avec un timer systemd
 
@@ -76,7 +76,7 @@ uv run candibot run
 | `run` | Simulation : recherche, notation et lettres. Aucune candidature n'est envoyée. |
 | `run --send` | Envoie aussi les candidatures prêtes |
 | `run --send --wait-code` | Idem, et attend le code HelloWork dans `data/otp.txt` pendant 15 minutes au plus |
-| `status` | Nombre d'offres par statut |
+| `status` | Nombre d'offres par statut et date du dernier passage |
 | `review` | Relit les lettres prêtes une par une : garder, modifier dans `$EDITOR` (nano par défaut) ou refuser |
 | `retry ID…` | Remet des offres `failed` ou `needs_review` dans la file d'envoi (`drafted`, ou `new` sans lettre) |
 | `dashboard` | Écrit un tableau de bord HTML dans `data/dashboard.html` : chiffres clés, envois et offres par jour, notes, offres à vérifier ou à faire à la main. Option `--out` pour un autre fichier. |
@@ -135,7 +135,16 @@ OpenCode est un agent qui a des outils (shell, fichiers), et le texte des offres
 
 ### Questions des recruteurs
 
-Certaines offres posent des questions après l'identité et le CV. La section `[answers]` fournit les réponses : civilité, disponibilité et salaire visé. La tranche de salaire est choisie par calcul, en mensuel ou en annuel. Une question qui propose de « rejoindre le CFA » ou d'« intégrer notre formation » révèle une annonce d'école : l'offre passe en `rejected`. Toute autre question obligatoire laisse l'offre en `needs_review`.
+Certaines offres posent des questions après l'identité et le CV. La section `[answers]` fournit les réponses : civilité, disponibilité, salaire visé et téléphone. La tranche de salaire est choisie par calcul, en mensuel ou en annuel. Une question qui propose de « rejoindre le CFA », d'« intégrer notre formation » ou qui demande « Quel campus souhaitez-vous intégrer ? » révèle une annonce d'école : l'offre passe en `rejected`. Toute autre question obligatoire laisse l'offre en `needs_review`.
+
+### Doublons
+
+HelloWork publie parfois la même annonce sous plusieurs identifiants. Une offre passe en `rejected`, avec le détail « doublon de l'offre … », si une offre déjà prête, envoyée ou à vérifier a :
+
+- le même titre, la même entreprise et le même lieu ;
+- une description semblable à 90 % au moins. Deux postes distincts au même intitulé gardent ainsi chacun leur chance.
+
+Ce contrôle a lieu avant la notation et avant chaque envoi. Les doublons écartés ne comptent pas dans `max_applications`.
 
 ### Statuts
 

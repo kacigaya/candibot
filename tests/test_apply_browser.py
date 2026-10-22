@@ -14,7 +14,7 @@ from candibot.questions import Answers
 
 HTML = "text/html; charset=utf-8"
 TITLE, COMPANY = "Chargé de Communication H/F", "ACME"
-ANSWERS = Answers("Madame", "immédiate", 1867.02, "100 % du SMIC")
+ANSWERS = Answers("Madame", "immédiate", 1867.02, "100 % du SMIC", "06 12 34 56 78")
 
 OFFER = """<html><body>
 <a data-cy="applyButtonHeader" href="#postuler">Postuler</a>
@@ -47,18 +47,26 @@ class FakeSession:
         await page.click(selector)
 
 
-def runApply(tmp_path, *, offerHtml: str):
-    """Lance `apply` sur l'offre simulée. Renvoie le résultat et les envois reçus."""
+def runApply(tmp_path, *, offerHtml: str, listedAfterReads: int = 1):
+    """Lance `apply` sur l'offre simulée. Renvoie le résultat et les envois reçus.
+
+    `listedAfterReads` : nombre de lectures de « Mes candidatures » après l'envoi
+    avant que la carte n'y apparaisse (HelloWork l'affiche parfois en retard).
+    """
     posts: list[str] = []
+    reads = 0
 
     async def handle(route: Route) -> None:
+        nonlocal reads
         request = route.request
         path = urlparse(request.url).path
         if request.method == "POST":
             posts.append(request.post_data or "")
             await route.fulfill(content_type=HTML, body="<html><body>Merci</body></html>")
         elif path.endswith("/mes-candidatures.html"):
-            await route.fulfill(content_type=HTML, body=f"<html><body>{CARD if posts else ''}</body></html>")
+            reads += bool(posts)
+            listed = posts and reads >= listedAfterReads
+            await route.fulfill(content_type=HTML, body=f"<html><body>{CARD if listed else ''}</body></html>")
         elif path.startswith("/fr-fr/emplois/"):
             await route.fulfill(content_type=HTML, body=offerHtml)
         else:
@@ -98,6 +106,14 @@ def testApplyFillsFormAndChecksMyApplications(tmp_path):
     assert "Firstname=Maxime" in sent and "LastName=NOM" in sent and "maxime%40example.com" in sent
     assert "MotivationLetter=Bonjour" in sent and "HasAcceptedCGU=on" in sent
     assert (tmp_path / "1-etape1-avant.png").is_file()
+
+
+def testApplyAnswersPhoneAndWaitsForLateListing(tmp_path, monkeypatch):
+    monkeypatch.setattr(application, "LIST_DELAY_MS", 0)
+    extra = '<label for="t">Téléphone</label><input id="t" type="tel" name="sav2_field1" required>'
+    result, posts = runApply(tmp_path, offerHtml=OFFER.replace("{extra}", extra), listedAfterReads=2)
+    assert result.status == "applied", result.detail
+    assert "sav2_field1=06+12+34+56+78" in posts[0]
 
 
 def testApplyStopsOnUnknownRequiredField(tmp_path):

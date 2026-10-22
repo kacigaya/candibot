@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from candibot.store import EXCLUDED_REASON
 
 DAYS = 30  # fenêtre des graphiques par jour
+STALE_DAYS = 2  # le timer lance un passage par jour : au-delà, il est arrêté ou en panne
 LIST_LIMIT = 20  # lignes par tableau
 # HelloWork ne publie que des offres en France. Le serveur tourne souvent en UTC :
 # sans fuseau fixe, un envoi à 0 h 30 heure de Paris tomberait la veille.
@@ -79,6 +80,7 @@ summary { cursor: pointer; color: var(--muted); font-size: 0.875rem; margin-top:
 details table { margin-top: 0.5rem; }
 .ok { color: var(--good); } .ko { color: var(--bad); }
 .empty { color: var(--muted); margin: 0; }
+.warn { border: 1px solid var(--bad); border-radius: 8px; padding: 0.75rem 1rem; margin: 0 0 1.5rem; }
 """
 
 
@@ -154,6 +156,21 @@ def _table(headers: list[str], rows: list[list[str]], empty: str) -> str:
         for cells in rows
     )
     return f'<div class="scroll"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+
+
+def _staleWarning(runs: list[Row], now: datetime) -> str:
+    """Bandeau si aucun passage récent : sans passage, l'alerte email ne part jamais."""
+    if runs and (now - datetime.fromisoformat(runs[0]["started"])).days < STALE_DAYS:
+        return ""
+    last = (
+        f"Dernier passage le {datetime.fromisoformat(runs[0]['started']).astimezone(TIMEZONE):%d/%m/%Y}."
+        if runs
+        else "Aucun passage enregistré."
+    )
+    return (
+        f'<p class="warn" role="status"><span class="ko">⚠ Passages arrêtés ?</span> {last} '
+        "Vérifiez le timer : <code>systemctl list-timers candibot.timer</code>.</p>"
+    )
 
 
 def render(offers: list[Row], runs: list[Row], now: datetime) -> str:
@@ -240,6 +257,7 @@ def render(offers: list[Row], runs: list[Row], now: datetime) -> str:
 <main id="main-content" tabindex="-1">
 <h1>candibot</h1>
 <p class="meta">Tableau de bord généré le {now.astimezone(TIMEZONE):%d/%m/%Y à %H:%M}.</p>
+{_staleWarning(runs, now)}
 <ul class="tiles">{tilesHtml}</ul>
 <div class="grid">
 {_section("Candidatures envoyées par jour", columns(appliedData, "Candidatures envoyées par jour", "Jour", 7), f"{DAYS} derniers jours")}
