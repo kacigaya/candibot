@@ -72,7 +72,7 @@ uv run candibot run
 
 | Commande | Description |
 | --- | --- |
-| `run` | Simulation : recherche, notation et lettres. Rien n'est envoyé. |
+| `run` | Simulation : recherche, notation et lettres. Aucune candidature n'est envoyée. |
 | `run --send` | Envoie aussi les candidatures prêtes |
 | `run --send --wait-code` | Idem, et attend le code HelloWork dans `data/otp.txt` pendant 15 minutes au plus |
 | `status` | Nombre d'offres par statut |
@@ -87,13 +87,15 @@ Le compte reste ensuite connecté grâce au profil navigateur de `data/browser/`
 
 ### Récapitulatif par email
 
-1. Mettez votre clé AgentMail dans `.env` :
+1. Mettez votre clé AgentMail dans `.env`. Ces commandes la lisent sans l'afficher ni l'écrire dans l'historique, et gardent les autres variables de `.env` :
 
    ```bash
-   echo 'AGENTMAIL_API_KEY=am_...' > .env && chmod 600 .env
+   read -r -s -p 'Clé AgentMail : ' AGENTMAIL_API_KEY && echo
+   export AGENTMAIL_API_KEY
+   (umask 077; touch .env; { grep -v '^AGENTMAIL_API_KEY=' .env; printf 'AGENTMAIL_API_KEY=%s\n' "$AGENTMAIL_API_KEY"; } > .env.tmp && mv .env.tmp .env)
    ```
 
-2. Créez la boîte d'envoi une seule fois. Le `client_id` fixe rend l'appel idempotent : le relancer renvoie la même boîte.
+2. Dans le même terminal, créez la boîte d'envoi une seule fois, puis lancez `unset AGENTMAIL_API_KEY`. Le `client_id` fixe rend l'appel idempotent : le relancer renvoie la même boîte.
 
    ```bash
    curl -X POST https://api.agentmail.to/v0/inboxes -H "Authorization: Bearer $AGENTMAIL_API_KEY" \
