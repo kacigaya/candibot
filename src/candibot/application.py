@@ -53,7 +53,7 @@ async def _answerQuestions(page: Page, submit: Locator, answers: questions.Answe
     """
     fields = await submit.evaluate(
         """b => b.form ? [...b.form.elements].filter(e => e.required && e.offsetParent !== null
-                && !e.value && (e.tagName === 'SELECT' || ['text', 'number'].includes(e.type)))
+                && !e.value && (e.tagName === 'SELECT' || ['text', 'number', 'tel'].includes(e.type)))
             .map(e => ({
                 name: e.name,
                 label: ((e.labels && e.labels[0] && e.labels[0].innerText) || e.getAttribute('aria-label') || '').trim(),
@@ -119,20 +119,75 @@ async def _enterCode(page: Page, zone: Locator, code: str) -> None:
 MY_APPLICATIONS = f"{BASE}/fr-fr/candidat/mes-candidatures.html"
 
 
+# Après l'envoi, la candidature met parfois plusieurs secondes à apparaître dans la liste.
+LIST_DELAY_MS = 15_000
+# Mots trop courants pour identifier une entreprise à eux seuls.
+COMPANY_NOISE = {
+    "groupe",
+    "group",
+    "sarl",
+    "sasu",
+    "france",
+    "paris",
+    "entreprise",
+    "societe",
+    "société",
+    "alternance",
+    "services",
+    "sas",
+    "sa",
+}
+
+
 def _norm(text: str) -> str:
     return " ".join(text.split()).casefold()
 
 
-def isListed(cards: list[str], title: str, company: str) -> bool:
-    """Vrai si une même carte de « Mes candidatures » porte ce titre et cette entreprise.
+def _compact(text: str) -> str:
+    return re.sub(r"[\W_]+", "", text.casefold())
 
-    La liste n'affiche pas l'identifiant de l'offre : titre et entreprise doivent
-    donc figurer ensemble sur une carte. Les offres anonymes n'y montrent pas de
-    nom d'entreprise, d'où la comparaison sur le seul titre dans ce cas.
+
+def _sameCompany(company: str, shown: str) -> bool:
+    """Vrai si le nom affiché sur la carte désigne l'entreprise de la fiche.
+
+    La fiche et la liste ne donnent pas toujours le même nom : « Lelu France » devient
+    « SARL LE LU », « Groupe ONET » devient « Onet Airport Services ». On retire les mots
+    courants (forme juridique, pays…), puis on colle le reste sans espaces ni ponctuation :
+    l'un des deux noms doit contenir l'autre en entier (4 lettres au moins, sinon égalité
+    stricte). Un mot partagé ne suffit pas :
+    « Orange Business » n'est pas « Business & Decision ».
     """
-    title, company = _norm(title), _norm(company)
-    anonymous = company in ("", "entreprise anonyme")
-    return any(title in card and (anonymous or company in card) for card in map(_norm, cards))
+
+    def core(name: str) -> str:
+        return "".join(w for w in map(_compact, name.split()) if w not in COMPANY_NOISE)
+
+    mine, theirs = core(company), core(shown)
+    if not mine or not theirs:
+        return False
+    # Un nom court se retrouve partout (« AI » dans « Mistral AI ») : il doit être identique.
+    shorter, longer = sorted((mine, theirs), key=len)
+    return shorter == longer or (len(shorter) >= 4 and shorter in longer)
+
+
+def isListed(cards: list[str], title: str, company: str) -> bool:
+    """Vrai si une carte de « Mes candidatures » porte ce titre, suivi de cette entreprise.
+
+    La liste n'affiche pas l'identifiant de l'offre. Une carte donne, ligne par ligne,
+    le statut, le titre, l'entreprise, le lieu, puis la date (relevé le 22/10/2026) :
+    le titre doit être une ligne entière, et l'entreprise la ligne suivante. Les offres
+    anonymes n'y montrent pas de nom d'entreprise, d'où la comparaison sur le seul titre.
+    """
+    title = _norm(title)
+    anonymous = _norm(company) in ("", "entreprise anonyme")
+    for card in cards:
+        lines = [_norm(line) for line in card.splitlines() if line.strip()]
+        for i, line in enumerate(lines):
+            if line != title:
+                continue
+            shown = lines[i + 1] if i + 1 < len(lines) else ""
+            if anonymous or _sameCompany(company, shown):
+                return True
+    return False
 
 
 async def myApplications(page: Page) -> list[str]:
@@ -257,8 +312,11 @@ async def apply(
                 if OTP_STEP.search(await page.inner_text("body")):
                     return ApplyResult("needs_review", "code de validation refusé ou expiré")
         await page.screenshot(path=screenshot, full_page=True)
-        if isListed(await myApplications(page), title, company):
-            return ApplyResult("applied", f"vérifiée dans « Mes candidatures » après {clicked} étape(s)")
+        for attempt in range(2):
+            if attempt:
+                await page.wait_for_timeout(LIST_DELAY_MS)
+            if isListed(await myApplications(page), title, company):
+                return ApplyResult("applied", f"vérifiée dans « Mes candidatures » après {clicked} étape(s)")
     except Exception as exc:
         if not clicked:
             raise  # rien n'est parti : l'appelant marque l'offre "failed"

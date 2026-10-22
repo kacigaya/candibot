@@ -10,13 +10,19 @@ from dataclasses import dataclass
 
 # Une question qui propose d'intégrer un cursus trahit une annonce d'école ou de CFA.
 SCHOOL = "school"
+# Les deux ordres existent : « intégrer notre campus » et « Quel campus souhaitez-vous intégrer ? ».
 _SCHOOL = re.compile(
     r"(rejoindre|int[ée]grer|inscri|candidater? (à|a) (notre|la) formation)"
-    r".{0,40}(cfa|[ée]cole|formation|campus|programme|cursus|bachelor|bts)",
+    r".{0,40}(cfa|[ée]cole|formation|campus|programme|cursus|bachelor|bts)"
+    r"|(cfa|[ée]cole|formation|campus|programme|cursus|bachelor|bts)\b.{0,30}"
+    r"souhait\w*[- ]vous (int[ée]grer|suivre|rejoindre)",
     re.I,
 )
 _CIVILITY = re.compile(r"civilit", re.I)
 _AVAILABILITY = re.compile(r"disponib", re.I)
+# « mobile » ou « portable » seuls parlent souvent d'autre chose : « Êtes-vous mobile ? »,
+# « Avez-vous un ordinateur portable ? ».
+_PHONE = re.compile(r"t[ée]l[ée]phone|num[ée]ro (de )?(portable|mobile)", re.I)
 _SALARY = re.compile(r"salai|r[ée]mun[ée]ration|pr[ée]tention|attentes? (salariale|financi)", re.I)
 
 
@@ -26,6 +32,7 @@ class Answers:
     availability: str  # début du texte de l'option, ex. "immédiate"
     salaryMonthly: float  # brut mensuel visé, ex. 1867.02 (100 % du SMIC)
     salaryText: str  # réponse aux champs libres sur la rémunération
+    phone: str = ""  # numéro donné quand le recruteur le demande, ex. "06 12 34 56 78"
 
 
 def _norm(text: str) -> str:
@@ -75,6 +82,8 @@ def answer(label: str, options: list[tuple[str, str]] | None, answers: Answers) 
             return answers.salaryText or None
         if _AVAILABILITY.search(label):
             return f"Disponible {answers.availability}" if answers.availability else None
+        if _PHONE.search(label):
+            return answers.phone or None
         return None
     choices = [(value, _norm(text)) for value, text in options if value]
     if _CIVILITY.search(label):

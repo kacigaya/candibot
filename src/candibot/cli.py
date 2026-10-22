@@ -88,6 +88,11 @@ def score(cfg: Config, store: Store) -> None:
     rows = store.byStatus("new", cfg.search.maxScored)
     log(f"notation de {len(rows)} offres")
     for row in rows:
+        duplicate = store.duplicateOf(row["id"], ("drafted", "applied", "needs_review"))
+        if duplicate:
+            store.setStatus(row["id"], "rejected", f"doublon de l'offre {duplicate}")
+            log(f"  doublon de {duplicate} : {row['title']} · {row['company']}")
+            continue
         try:
             result = llm.evaluate(
                 cfg.candidate,
@@ -125,16 +130,27 @@ def codeWaiter(path: Path, timeoutS: int = 900):
 
 
 async def sendApplications(session: WebSkrapSession, page, cfg: Config, store: Store, otp=None) -> None:
-    rows = store.byStatus("drafted", cfg.search.maxApplications)
+    # Pas de LIMIT ici : les doublons écartés ne doivent pas consommer la limite d'envois.
+    rows = store.byStatus("drafted")
     shots = cfg.dataDir / "shots"
     shots.mkdir(parents=True, exist_ok=True)
     c = cfg.candidate
-    for n, row in enumerate(rows):
-        if n:
-            await asyncio.sleep(random.uniform(*cfg.search.pauseSeconds))
+    attempts = 0
+    for row in rows:
+        if attempts >= cfg.search.maxApplications:
+            break
         # Marqué avant l'envoi : si le processus meurt en cours de route, l'offre
-        # n'est pas renvoyée au passage suivant (pas de candidature en double).
-        store.setStatus(row["id"], "needs_review", "envoi interrompu avant confirmation")
+        # n'est pas renvoyée au passage suivant (pas de candidature en double). Une copie
+        # de l'annonce partie plus tôt, dans ce passage ou un autre, est écartée.
+        claimed = store.claim(row["id"], "envoi interrompu avant confirmation")
+        if claimed is None:
+            continue  # prise entre-temps par un autre passage
+        if claimed == "rejected":
+            log(f"  doublon d'une offre déjà envoyée, pas envoyée : {row['title']} · {row['company']}")
+            continue
+        if attempts:
+            await asyncio.sleep(random.uniform(*cfg.search.pauseSeconds))
+        attempts += 1
         try:
             result = await application.apply(
                 session,
@@ -323,6 +339,17 @@ def retry(store: Store, ids: list[str]) -> None:
     print("Vérifiez votre espace HelloWork avant `run --send` pour les offres needs_review.")
 
 
+def lastRunLine(started: str | None, now: datetime) -> str:
+    """Date du dernier passage, avec un avertissement s'il est trop ancien (dashboard.STALE_DAYS)."""
+    if started is None:
+        return "dernier passage : aucun enregistré"
+    days = (now - datetime.fromisoformat(started)).days
+    line = f"dernier passage : {started} (il y a {days} j)"
+    if days >= dashboard.STALE_DAYS:
+        line += " -- vérifiez le timer : systemctl list-timers candibot.timer"
+    return line
+
+
 def writeDashboard(store: Store, path: Path) -> None:
     html = dashboard.render(store.offers(), store.runs(10), datetime.now(UTC))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -367,6 +394,7 @@ def main() -> None:
             else:
                 for status, count in sorted(store.counts().items()):
                     print(f"{status:13} {count}")
+                print(lastRunLine(store.lastRun(), datetime.now(UTC)))
         except (KeyboardInterrupt, EOFError):
             sys.exit(130)
         finally:

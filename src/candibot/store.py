@@ -2,6 +2,7 @@
 
 import sqlite3
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from candibot.hellowork import Offer
@@ -17,6 +18,9 @@ from candibot.hellowork import Offer
 #   drafted -> failed          erreur technique avant tout clic d'envoi : rien n'est parti
 #   failed, needs_review -> drafted (ou new sans lettre)   `candibot retry`
 EXCLUDED_REASON = "organisme de formation exclu (config)"
+# Les copies d'une même annonce relevées en base ont des descriptions semblables à 95 % ou plus ;
+# deux postes distincts au même intitulé ont des textes bien plus éloignés.
+DUPLICATE_SIMILARITY = 0.9
 STATUSES = ("new", "rejected", "external", "drafted", "applied", "needs_review", "failed")
 
 SCHEMA = """
@@ -118,6 +122,34 @@ class Store:
                 (status, detail, _now(), offerId),
             )
 
+    def claim(self, offerId: str, detail: str) -> str | None:
+        """Réserve une offre `drafted` pour l'envoi, ou l'écarte si c'est la copie d'une offre partie.
+
+        Renvoie `needs_review` (réservée, à envoyer), `rejected` (doublon d'une offre `applied`
+        ou `needs_review`), ou None si l'offre n'est plus `drafted` (prise par un autre passage).
+        Contrôle et changement de statut se font sous un même verrou d'écriture : deux passages
+        simultanés n'envoient ni la même offre, ni deux copies de la même annonce.
+        """
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.db.execute("SELECT status FROM offers WHERE id = ?", (offerId,)).fetchone()
+            if row is None or row["status"] != "drafted":
+                self.db.rollback()
+                return None
+            duplicate = self.duplicateOf(offerId, ("applied", "needs_review"))
+            status, text = (
+                ("rejected", f"doublon de l'offre {duplicate}") if duplicate else ("needs_review", detail)
+            )
+            self.db.execute(
+                "UPDATE offers SET status = ?, detail = ?, updated_at = ? WHERE id = ?",
+                (status, text, _now(), offerId),
+            )
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
+        return status
+
     def retry(self, offerId: str) -> str | None:
         """Remet une offre `failed` ou `needs_review` dans la file d'envoi.
 
@@ -159,6 +191,31 @@ class Store:
     def runs(self, limit: int) -> list[sqlite3.Row]:
         """Derniers passages, du plus récent au plus ancien."""
         return self.db.execute("SELECT * FROM runs ORDER BY started DESC LIMIT ?", (limit,)).fetchall()
+
+    def duplicateOf(self, offerId: str, statuses: tuple[str, ...]) -> str | None:
+        """Copie de cette offre dans un de ces statuts : même titre, entreprise et lieu, texte semblable.
+
+        HelloWork publie parfois la même annonce sous plusieurs identifiants, et « Mes candidatures »
+        met du temps à afficher un envoi : sans ce contrôle, la même offre part deux fois. Le texte
+        départage deux postes distincts qui portent le même intitulé au même endroit.
+        """
+        marks = ", ".join("?" * len(statuses))
+        rows = self.db.execute(
+            "SELECT o.id, o.description, me.description AS mine FROM offers o JOIN offers me ON me.id = ?"
+            " WHERE o.id != me.id AND o.title = me.title AND o.company = me.company"
+            f" AND o.location = me.location AND o.status IN ({marks}) ORDER BY o.seen_at",
+            (offerId, *statuses),
+        ).fetchall()
+        for row in rows:
+            matcher = SequenceMatcher(None, row["mine"], row["description"])
+            # quick_ratio borne ratio par le haut : il écarte vite les textes différents.
+            if matcher.quick_ratio() >= DUPLICATE_SIMILARITY and matcher.ratio() >= DUPLICATE_SIMILARITY:
+                return row["id"]
+        return None
+
+    def lastRun(self) -> str | None:
+        row = self.db.execute("SELECT MAX(started) FROM runs").fetchone()
+        return row[0]
 
     def counts(self) -> dict[str, int]:
         rows = self.db.execute("SELECT status, COUNT(*) FROM offers GROUP BY status").fetchall()
