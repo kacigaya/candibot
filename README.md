@@ -79,7 +79,15 @@ uv run candibot run
 | `status` | Nombre d'offres par statut |
 | `review` | Relit les lettres prêtes une par une : garder, modifier dans `$EDITOR` (nano par défaut) ou refuser |
 | `retry ID…` | Remet des offres `failed` ou `needs_review` dans la file d'envoi (`drafted`, ou `new` sans lettre) |
+| `dashboard` | Écrit un tableau de bord HTML dans `data/dashboard.html` : chiffres clés, envois et offres par jour, notes, offres à vérifier ou à faire à la main. Option `--out` pour un autre fichier. |
 | `check` | Vérifie les sélecteurs HelloWork : lit une recherche et une fiche, ouvre le formulaire sans le soumettre. Code de sortie 1 en cas de problème. |
+
+### Tableau de bord
+
+1. Lancez `uv run candibot dashboard`.
+2. Ouvrez `data/dashboard.html` dans un navigateur. Sur un serveur, copiez d'abord le fichier sur votre poste, par exemple avec `scp`.
+
+La page est statique : aucun serveur, aucun JavaScript. Elle contient vos candidatures : ne la publiez pas. Relancez la commande pour la mettre à jour.
 
 ### Première candidature
 

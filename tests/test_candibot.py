@@ -1,11 +1,13 @@
+import dataclasses
 import io
 import json
 import os
 import urllib.error
+from datetime import UTC, datetime
 
 import pytest
 
-from candibot import application, hellowork, llm, mailer
+from candibot import application, dashboard, hellowork, llm, mailer
 from candibot.config import Search
 from candibot.store import EXCLUDED_REASON, Store
 
@@ -152,6 +154,26 @@ def testRenderGroupsByStatus(tmp_path):
     assert "Lettres prêtes" in body and "[9/10]" in body and "    Bonjour," in body
     assert "À faire à la main" in body
     store.close()
+
+
+def testDashboardEscapesOfferTextAndSkipsExcludedScores(tmp_path):
+    store = Store(tmp_path / "db.sqlite")
+    # Le texte vient d'Internet : il ne doit jamais devenir du HTML actif.
+    store.add(dataclasses.replace(hellowork.parseOffer("1", offerPage()), title="<script>alert(1)</script>"))
+    store.add(hellowork.parseOffer("2", offerPage()))
+    store.scored("1", 9, "bon profil", "Bonjour", minScore=7)
+    store.setStatus("1", "applied")
+    store.scored("2", 0, EXCLUDED_REASON, "", minScore=7)
+    store.recordRun("2026-10-01T07:30:00+00:00", "aucune offre trouvée")
+    page = dashboard.render(store.offers(), store.runs(10), datetime.now(UTC))
+    store.close()
+    assert "<script>" not in page and "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert "écartées, dont 1 écoles" in page
+    assert "<title>0 : 0</title>" not in page  # note 0 fictive des écoles exclues
+    assert "<title>9 : 1</title>" in page
+    assert "✗ échec</span> : aucune offre trouvée" in page
+    # 07:30 UTC le 1er octobre = 09:30 à Paris (heure d'été).
+    assert "01/10/2026 09:30" in page
 
 
 def testExclusionIsCaseInsensitiveSubstring():
