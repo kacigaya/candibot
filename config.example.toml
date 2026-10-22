@@ -6,21 +6,25 @@ first_name = "Prénom"
 last_name = "NOM"
 email = "prenom.nom@example.com"
 cv_pdf = "data/cv.pdf"      # 2 Mo max (limite HelloWork)
-cv_text = "data/cv.md"      # version texte lue par Claude pour noter et rédiger
+cv_text = "data/cv.md"      # version texte lue par le modèle pour noter et rédiger
 # Précisions reprises dans les lettres. Laisser vide pour ne pas les mentionner.
-rhythm = ""                 # ex. "3 jours en entreprise, 2 jours à l'école"
+rhythm = ""                 # alternance seulement, ex. "3 jours en entreprise, 2 jours à l'école"
 availability = ""           # ex. "dès maintenant"
 
 [search]
 queries = ["marketing communication", "marketing digital", "communication digitale"]
 location = "Île-de-France"
+# Types de contrat recherchés, un ou plusieurs parmi : "CDI", "CDD", "Intérim",
+# "Stage", "Alternance", "Indépendant", "Freelance", "Franchise", "Associé",
+# "Fonctionnaire", "Stage de lycée".
+contracts = ["Alternance"]
 pages = 2                   # 30 offres par page et par requête
 min_score = 7               # note sur 10 en dessous de laquelle l'offre est écartée
-max_scored = 40             # offres notées par Claude à chaque passage
+max_scored = 40             # offres notées par le modèle à chaque passage
 max_applications = 10       # candidatures envoyées par passage avec --send
 pause_seconds = [60, 180]   # pause aléatoire entre deux candidatures
-# Organismes de formation qui recrutent pour leur propre cursus : écartés sans
-# appel à Claude. Comparaison insensible à la casse, sur une partie du nom.
+# Organismes de formation qui recrutent pour leur propre cursus (surtout en
+# alternance et en stage) : écartés sans appel au modèle. Comparaison insensible à la casse, sur une partie du nom.
 exclude_companies = [
     "ISCOD", "Digital School of Paris", "AURLOM", "Studi", "IFAE", "MyDigitalSchool",
     "Institut F2I", "L'École Française", "École de l'Excellence Commerciale", "NEXA Digital School",
@@ -36,7 +40,7 @@ exclude_companies = [
 civility = "Madame"
 availability = "immédiate"
 # Salaire brut mensuel visé. Sert à choisir la tranche de salaire proposée.
-# Le minimum légal en apprentissage dépend de l'âge et de l'année de formation
+# En alternance, le minimum légal dépend de l'âge et de l'année de formation
 # (service-public.gouv.fr). Exemple : 100 % du SMIC brut, 1 867,02 €/mois en 2026.
 salary_monthly = 1867.02
 salary_text = "100 % du SMIC"

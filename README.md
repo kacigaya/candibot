@@ -5,8 +5,8 @@
 <h1 align="center">candibot</h1>
 
 <p align="center">
-  <strong>Bot de candidature en alternance pour HelloWork.</strong><br>
-  <em>Trouve les offres d'alternance, les note par rapport à votre CV, rédige un message pour chaque recruteur et peut envoyer la candidature à votre place.</em>
+  <strong>Bot de candidature pour HelloWork : CDI, CDD, intérim, stage, alternance…</strong><br>
+  <em>Trouve les offres du type de contrat choisi, les note par rapport à votre CV, rédige un message pour chaque recruteur et peut envoyer la candidature à votre place.</em>
 </p>
 
 <p align="center">
@@ -19,7 +19,7 @@
 
 ## Fonctionnalités
 
-- Cherche les offres d'alternance sur HelloWork pour chacune de vos requêtes
+- Cherche les offres sur HelloWork pour chacune de vos requêtes, filtrées sur les types de contrat choisis (`search.contracts`)
 - Écarte les offres des écoles, CFA et organismes de formation qui recrutent pour leur propre cursus, avant tout appel au modèle
 - Note chaque offre sur 10 par rapport à votre CV avec un modèle gratuit d'OpenCode, isolé dans bubblewrap
 - Rédige un message de 120 à 200 mots au recruteur, à partir des seuls faits de votre CV
@@ -62,7 +62,7 @@ Ensuite :
 
 ### Mise en place avec un agent
 
-Un agent de code peut faire la configuration avec vous. Le skill [`setup-candibot`](.claude/skills/setup-candibot/SKILL.md) lui indique les questions à poser. L'agent écrit ensuite `config.toml` et vérifie qu'il se charge. Claude Code trouve le skill automatiquement.
+Un agent de code peut faire la configuration avec vous. Le skill [`setup-candibot`](.agents/skills/setup-candibot/SKILL.md) lui indique les questions à poser. L'agent écrit ensuite `config.toml` et vérifie qu'il se charge. Codex le lit dans `.agents/skills/`, Claude Code dans `.claude/skills/`, et `.codex/skills/` sert aux anciennes versions de Codex : ces deux derniers dossiers sont des liens symboliques vers le premier.
 
 ## Utilisation
 
@@ -107,8 +107,8 @@ Ces emails vous sont destinés. candibot n'écrit jamais aux recruteurs.
 
 ## Fonctionnement
 
-1. **Recherche.** Pour chaque requête, candibot lit les résultats HelloWork filtrés sur le contrat « Alternance », puis ouvre chaque nouvelle offre. La fiche contient un bloc JSON-LD `JobPosting`, sauf pour les offres anonymes, lues dans le HTML.
-2. **Filtrage.** Les offres des entreprises de `search.exclude_companies` sont écartées sans appel au modèle. Ce sont surtout des écoles qui publient des offres pour recruter des étudiants dans leurs cursus. Elles forment la majorité des offres d'alternance sur HelloWork.
+1. **Recherche.** Pour chaque requête, candibot lit les résultats HelloWork filtrés sur les contrats de `search.contracts` (par exemple `["CDI", "CDD"]`), puis ouvre chaque nouvelle offre. La fiche contient un bloc JSON-LD `JobPosting`, sauf pour les offres anonymes, lues dans le HTML.
+2. **Filtrage.** Les offres des entreprises de `search.exclude_companies` sont écartées sans appel au modèle. Ce sont surtout des écoles qui publient des offres pour recruter des étudiants dans leurs cursus. Elles forment la majorité des offres d'alternance et de stage sur HelloWork.
 3. **Notation.** Un modèle OpenCode (`llm.models`, essayés dans l'ordre) note l'offre et rédige le message à partir de `data/cv.md`. Une lettre qui contient des caractères hors alphabet latin est refusée et confiée au modèle suivant.
 4. **Envoi** (seulement avec `--send`). candibot remplit l'identité, le CV, le message et les CGU, puis avance d'étape en étape. Il s'arrête en `needs_review`, avec une capture d'écran de chaque étape, si une étape contient un champ obligatoire qu'il ne sait pas remplir ou si la candidature n'apparaît pas dans « Mes candidatures ».
 5. **Compte rendu.** Un email par candidature `applied` ou `needs_review`, avec l'offre et le message envoyé, puis le récapitulatif du passage. Chaque envoi porte une clé d'idempotence : un nouvel essai du même passage n'envoie pas de doublon.
@@ -194,7 +194,6 @@ uv run ruff format --check .
 
 ## Limites
 
-- Le prompt de notation (`SYSTEM` dans [`src/candibot/llm.py`](src/candibot/llm.py)) vise un profil précis : Master 1, marketing et communication, Île-de-France. Adaptez-le pour un autre domaine ou une autre région.
 - Les sélecteurs HelloWork ont été vérifiés le 24/09/2026. Si le site change, corrigez-les dans [`src/candibot/hellowork.py`](src/candibot/hellowork.py).
 - « Mes candidatures » n'affiche pas l'identifiant de l'offre. La correspondance se fait donc sur le titre et l'entreprise d'une même carte. Seule la première page (les plus récentes) est lue.
 - Indeed renvoie 403 (Cloudflare) depuis les IP de datacenter, et Welcome to the Jungle exige un compte pour chercher. Ces deux sites ne sont pas gérés.

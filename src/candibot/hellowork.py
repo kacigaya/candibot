@@ -1,7 +1,7 @@
 """Recherche et candidature sur HelloWork via un navigateur Patchright (WebSkrap).
 
 Sélecteurs relevés sur le site le 24/09/2026. Si HelloWork change son balisage,
-les fonctions `parse_*` et `apply` sont les seuls endroits à corriger.
+les fonctions `parse*` et `apply` sont les seuls endroits à corriger.
 """
 
 import html
@@ -19,6 +19,20 @@ from webskrap import WebSkrapSession
 from candibot import questions
 
 BASE = "https://www.hellowork.com"
+# Types de contrat acceptés dans config.toml -> valeur du filtre `c` de la recherche HelloWork.
+CONTRACTS = {
+    "CDI": "CDI",
+    "CDD": "CDD",
+    "Intérim": "Travail_temp",
+    "Stage": "Stage",
+    "Alternance": "Alternance",
+    "Indépendant": "Independant",
+    "Freelance": "Freelance",
+    "Franchise": "Franchise",
+    "Associé": "Associe",
+    "Fonctionnaire": "Fonctionnaire",
+    "Stage de lycée": "Stage_de_lycee",
+}
 # Bouton des offres dont la candidature se fait hors de HelloWork.
 EXTERNAL = re.compile(r"Postuler sur le site du (recruteur|partenaire)")
 # Fiche encore en ligne mais offre close : plus de bouton « Postuler ».
@@ -40,21 +54,22 @@ class Offer:
     company: str
     location: str
     description: str
-    on_site: bool  # candidature possible sur HelloWork, sans passer par le site du recruteur
+    onSite: bool  # candidature possible sur HelloWork, sans passer par le site du recruteur
 
 
-def search_url(query: str, location: str, page: int) -> str:
-    params = {"k": query, "l": location, "c": "Alternance", "p": page}
+def searchUrl(query: str, location: str, contracts: tuple[str, ...], page: int) -> str:
+    """URL d'une page de résultats. Plusieurs contrats donnent un paramètre `c` répété (OU logique)."""
+    params = [("k", query), ("l", location), *(("c", CONTRACTS[c]) for c in contracts), ("p", page)]
     return f"{BASE}/fr-fr/emploi/recherche.html?{urlencode(params)}"
 
 
-def offer_url(offer_id: str) -> str:
-    return f"{BASE}/fr-fr/emplois/{offer_id}.html"
+def offerUrl(offerId: str) -> str:
+    return f"{BASE}/fr-fr/emplois/{offerId}.html"
 
 
-def parse_search(page_html: str) -> list[str]:
+def parseSearch(pageHtml: str) -> list[str]:
     """Identifiants des offres d'une page de résultats, dans l'ordre, sans doublon."""
-    ids = re.findall(r'data-id-storage-item-id="(\d+)"', page_html)
+    ids = re.findall(r'data-id-storage-item-id="(\d+)"', pageHtml)
     return list(dict.fromkeys(ids))
 
 
@@ -82,31 +97,31 @@ def _location(posting: dict) -> str:
     return ", ".join(labels)
 
 
-def _parse_anonymous(offer_id: str, page_html: str) -> Offer | None:
+def _parseAnonymous(offerId: str, pageHtml: str) -> Offer | None:
     """Les offres d'entreprises anonymes n'ont pas de JSON-LD : on lit le HTML de la fiche."""
-    title = re.search(r'data-cy="jobTitle"[^>]*>(.*?)<', page_html, re.S)
-    start = re.search(r"Les missions du poste|Détail du poste", page_html)
+    title = re.search(r'data-cy="jobTitle"[^>]*>(.*?)<', pageHtml, re.S)
+    start = re.search(r"Les missions du poste|Détail du poste", pageHtml)
     if not title or not start:
         return None
     # Le <title> se termine par « Ville (75) | Hellowork » : seul le département est fiable.
-    department = re.search(r"\((\d{2,3}|2[AB])\)\s*\|\s*Hellowork</title>", page_html)
+    department = re.search(r"\((\d{2,3}|2[AB])\)\s*\|\s*Hellowork</title>", pageHtml)
     return Offer(
-        id=offer_id,
-        url=offer_url(offer_id),
+        id=offerId,
+        url=offerUrl(offerId),
         title=html.unescape(title.group(1)).strip(),
         company="Entreprise anonyme",
         location=f"département {department.group(1)}" if department else "",
-        description=_text(page_html[start.start() : start.start() + 15_000])[:8000],
-        on_site=not EXTERNAL.search(page_html),
+        description=_text(pageHtml[start.start() : start.start() + 15_000])[:8000],
+        onSite=not EXTERNAL.search(pageHtml),
     )
 
 
-def parse_offer(offer_id: str, page_html: str) -> Offer | None:
+def parseOffer(offerId: str, pageHtml: str) -> Offer | None:
     """Lit le bloc JSON-LD JobPosting de la fiche, ou le HTML pour une offre anonyme.
 
     None si la fiche n'a ni l'un ni l'autre (offre expirée ou balisage changé).
     """
-    for block in re.findall(r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', page_html, re.S):
+    for block in re.findall(r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', pageHtml, re.S):
         try:
             data = json.loads(block)
         except json.JSONDecodeError:
@@ -115,18 +130,18 @@ def parse_offer(offer_id: str, page_html: str) -> Offer | None:
             continue
         company = (data.get("hiringOrganization") or {}).get("name") or ""
         return Offer(
-            id=offer_id,
-            url=offer_url(offer_id),
+            id=offerId,
+            url=offerUrl(offerId),
             title=html.unescape(data.get("title", "")).strip(),
             company=html.unescape(company).strip(),
             location=_location(data),
             description=_text(data.get("description", "")),
-            on_site=not EXTERNAL.search(page_html),
+            onSite=not EXTERNAL.search(pageHtml),
         )
-    return _parse_anonymous(offer_id, page_html)
+    return _parseAnonymous(offerId, pageHtml)
 
 
-async def dismiss_cookies(page: Page) -> None:
+async def dismissCookies(page: Page) -> None:
     """HelloWork utilise sa propre bannière, que le refus automatique de WebSkrap ne connaît pas."""
     try:
         await page.click(".hw-cc-notice-modal__btn-continue-without-accepting", timeout=5_000)
@@ -134,20 +149,20 @@ async def dismiss_cookies(page: Page) -> None:
         pass  # déjà refusée dans ce profil, ou pas affichée
 
 
-async def search(page: Page, query: str, location: str, pages: int) -> list[str]:
+async def search(page: Page, query: str, location: str, contracts: tuple[str, ...], pages: int) -> list[str]:
     ids: list[str] = []
     for n in range(1, pages + 1):
-        await page.goto(search_url(query, location, n), wait_until="domcontentloaded")
-        found = parse_search(await page.content())
+        await page.goto(searchUrl(query, location, contracts, n), wait_until="domcontentloaded")
+        found = parseSearch(await page.content())
         if not found:
             break
         ids.extend(found)
     return list(dict.fromkeys(ids))
 
 
-async def fetch_offer(page: Page, offer_id: str) -> Offer | None:
-    await page.goto(offer_url(offer_id), wait_until="domcontentloaded")
-    return parse_offer(offer_id, await page.content())
+async def fetchOffer(page: Page, offerId: str) -> Offer | None:
+    await page.goto(offerUrl(offerId), wait_until="domcontentloaded")
+    return parseOffer(offerId, await page.content())
 
 
 @dataclass(frozen=True)
@@ -156,7 +171,7 @@ class ApplyResult:
     detail: str
 
 
-async def _human_click(session: WebSkrapSession, page: Page, selector: str) -> None:
+async def _humanClick(session: WebSkrapSession, page: Page, selector: str) -> None:
     """Clic à la souris sur une trajectoire humaine (WebSkrap).
 
     `human_click` clique à des coordonnées : si un calque recouvre la cible,
@@ -167,11 +182,11 @@ async def _human_click(session: WebSkrapSession, page: Page, selector: str) -> N
     await session.human_click(page, selector)
 
 
-async def _answer_questions(page: Page, submit: Locator, answers: questions.Answers) -> str | None:
+async def _answerQuestions(page: Page, submit: Locator, answers: questions.Answers) -> str | None:
     """Répond aux questions obligatoires vides du formulaire de `submit`.
 
     Renvoie le libellé de la question si elle trahit une annonce d'école, sinon None.
-    Les questions inconnues restent vides : `_blocking_fields` les signalera.
+    Les questions inconnues restent vides : `_blockingFields` les signalera.
     """
     fields = await submit.evaluate(
         """b => b.form ? [...b.form.elements].filter(e => e.required && e.offsetParent !== null
@@ -197,13 +212,13 @@ async def _answer_questions(page: Page, submit: Locator, answers: questions.Answ
     return None
 
 
-async def _fill_if_empty(zone: Locator, selector: str, value: str) -> None:
+async def _fillIfEmpty(zone: Locator, selector: str, value: str) -> None:
     field = zone.locator(selector)
     if await field.count() and await field.is_visible() and not await field.input_value():
         await field.fill(value)
 
 
-async def _blocking_fields(submit: Locator) -> list[str]:
+async def _blockingFields(submit: Locator) -> list[str]:
     """Champs obligatoires visibles et vides du formulaire de `submit`.
 
     On ne soumet jamais une étape incomplète : `form.elements` inclut aussi les
@@ -219,7 +234,7 @@ async def _blocking_fields(submit: Locator) -> list[str]:
     )
 
 
-async def _enter_code(page: Page, zone: Locator, code: str) -> None:
+async def _enterCode(page: Page, zone: Locator, code: str) -> None:
     """Saisit le code dans les cases de l'étape de validation.
 
     HelloWork affiche une case par chiffre et valide seul au 6ᵉ : on tape dans la
@@ -245,7 +260,7 @@ def _norm(text: str) -> str:
     return " ".join(text.split()).casefold()
 
 
-def is_listed(cards: list[str], title: str, company: str) -> bool:
+def isListed(cards: list[str], title: str, company: str) -> bool:
     """Vrai si une même carte de « Mes candidatures » porte ce titre et cette entreprise.
 
     La liste n'affiche pas l'identifiant de l'offre : titre et entreprise doivent
@@ -257,7 +272,7 @@ def is_listed(cards: list[str], title: str, company: str) -> bool:
     return any(title in card and (anonymous or company in card) for card in map(_norm, cards))
 
 
-async def my_applications(page: Page) -> list[str]:
+async def myApplications(page: Page) -> list[str]:
     """Texte de chaque carte de la page « Mes candidatures » (première page, les plus récentes)."""
     await page.goto(MY_APPLICATIONS, wait_until="domcontentloaded")
     if "mes-candidatures" not in page.url:
@@ -279,15 +294,15 @@ async def apply(
     *,
     title: str,
     company: str,
-    first_name: str,
-    last_name: str,
+    firstName: str,
+    lastName: str,
     email: str,
-    cv_pdf: Path,
+    cvPdf: Path,
     letter: str,
     screenshot: Path,
     answers: questions.Answers,
     otp: Callable[[], Awaitable[str | None]] | None = None,
-    max_steps: int = 4,
+    maxSteps: int = 4,
 ) -> ApplyResult:
     """Remplit et soumet le formulaire HelloWork, étape par étape.
 
@@ -305,40 +320,40 @@ async def apply(
             "needs_review", f"lettre de {len(letter)} caractères, HelloWork coupe à {LETTER_MAX}"
         )
     try:
-        if is_listed(await my_applications(page), title, company):
+        if isListed(await myApplications(page), title, company):
             return ApplyResult("applied", "déjà dans « Mes candidatures », rien de renvoyé")
     except RuntimeError:
         pass  # pas encore de compte connecté : la première candidature le créera
 
     await page.goto(offer_url_, wait_until="domcontentloaded")
-    await dismiss_cookies(page)
+    await dismissCookies(page)
     content = await page.content()
     if EXTERNAL.search(content):
         return ApplyResult("external", "candidature sur le site du recruteur ou d'un partenaire")
     if not await page.locator("[data-cy='applyButtonHeader']").count() and EXPIRED.search(content):
         return ApplyResult("rejected", "offre expirée")
 
-    await _human_click(session, page, "[data-cy='applyButtonHeader'] >> nth=0")
+    await _humanClick(session, page, "[data-cy='applyButtonHeader'] >> nth=0")
     zone = page.locator(APPLY)
     await zone.locator("[data-cy='submitButton']").wait_for(state="attached", timeout=15_000)
 
     # Profil déjà connecté : HelloWork pré-remplit ou masque ces champs.
-    await _fill_if_empty(zone, "input[name='Firstname']", first_name)
-    await _fill_if_empty(zone, "input[name='LastName']", last_name)
-    await _fill_if_empty(zone, "input[name='Email']", email)
+    await _fillIfEmpty(zone, "input[name='Firstname']", firstName)
+    await _fillIfEmpty(zone, "input[name='LastName']", lastName)
+    await _fillIfEmpty(zone, "input[name='Email']", email)
 
     resume = zone.locator("input[name='JweHashResume']")
     if await resume.count() and not await resume.input_value():
         # Le champ fichier est envoyé tout seul à /uploadcv ; HelloWork renvoie
         # un jeton dans JweHashResume une fois le CV accepté.
-        await zone.locator("input[name='upload']").set_input_files(cv_pdf)
+        await zone.locator("input[name='upload']").set_input_files(cvPdf)
         await page.wait_for_function(
             "() => document.querySelector(\"#postuler input[name='JweHashResume']\")?.value", timeout=30_000
         )
 
     if letter:
         if not await zone.locator("#cover-letter-collapse-funnel").is_checked():
-            await _human_click(session, page, f"{APPLY} label[for='cover-letter-collapse-funnel']")
+            await _humanClick(session, page, f"{APPLY} label[for='cover-letter-collapse-funnel']")
         await zone.locator("textarea[name='MotivationLetter']").fill(letter)
 
     cgu = zone.locator("input[name='HasAcceptedCGU']")
@@ -348,22 +363,22 @@ async def apply(
     shot = lambda suffix: screenshot.with_name(f"{screenshot.stem}-{suffix}.png")  # noqa: E731
     clicked = 0  # étapes soumises : dès la première, une erreur ne doit plus donner "failed"
     try:
-        for step in range(1, max_steps + 1):
+        for step in range(1, maxSteps + 1):
             # Chaque étape a son bouton (« Continuer », « Postuler », « Envoyer ma candidature »).
-            submit_selector = f"{APPLY} button[type=submit]:visible >> nth=0"
-            submit = page.locator(submit_selector)
+            submitSelector = f"{APPLY} button[type=submit]:visible >> nth=0"
+            submit = page.locator(submitSelector)
             if not await submit.count():
                 break  # plus de formulaire : envoyé, ou page inattendue ; la vérification tranche
-            school = await _answer_questions(page, submit, answers)
+            school = await _answerQuestions(page, submit, answers)
             if school:
                 await page.screenshot(path=screenshot, full_page=True)
                 return ApplyResult("rejected", f"annonce d'école : « {school} »")
-            missing = await _blocking_fields(submit)
+            missing = await _blockingFields(submit)
             if missing:
                 await page.screenshot(path=screenshot, full_page=True)
                 return ApplyResult("needs_review", f"étape {step} : champs obligatoires vides {missing}")
             await page.screenshot(path=shot(f"etape{step}-avant"), full_page=True)
-            await _human_click(session, page, submit_selector)
+            await _humanClick(session, page, submitSelector)
             clicked = step
             await _settle(page)
             await page.screenshot(path=shot(f"etape{step}-apres"), full_page=True)
@@ -374,12 +389,12 @@ async def apply(
                 if not code:
                     await page.screenshot(path=screenshot, full_page=True)
                     return ApplyResult("needs_review", "code de validation HelloWork demandé, non saisi")
-                await _enter_code(page, zone, code)
+                await _enterCode(page, zone, code)
                 await page.screenshot(path=shot(f"etape{step}-code"), full_page=True)
                 if OTP_STEP.search(await page.inner_text("body")):
                     return ApplyResult("needs_review", "code de validation refusé ou expiré")
         await page.screenshot(path=screenshot, full_page=True)
-        if is_listed(await my_applications(page), title, company):
+        if isListed(await myApplications(page), title, company):
             return ApplyResult("applied", f"vérifiée dans « Mes candidatures » après {clicked} étape(s)")
     except Exception as exc:
         if not clicked:

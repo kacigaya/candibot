@@ -1,1 +1,1 @@
-"""Bot de candidature en alternance sur HelloWork."""
+"""Bot de candidature sur HelloWork (CDI, CDD, alternance, stage…)."""

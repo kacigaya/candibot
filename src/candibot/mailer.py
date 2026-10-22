@@ -79,10 +79,10 @@ def confirmation(row: Row, status: str, detail: str) -> tuple[str, str]:
 API = "https://api.agentmail.to/v0"
 
 
-def send(mail: Mail, subject: str, body: str, idempotency_key: str) -> str:
+def send(mail: Mail, subject: str, body: str, idempotencyKey: str) -> str:
     """Envoie le récapitulatif via AgentMail et renvoie l'identifiant du message.
 
-    `idempotency_key` rend l'envoi rejouable sans doublon : AgentMail renvoie le
+    `idempotencyKey` rend l'envoi rejouable sans doublon : AgentMail renvoie le
     message d'origine pour une clé déjà vue dans les dernières 24 h.
     """
     key = os.environ.get("AGENTMAIL_API_KEY", "")
@@ -94,7 +94,7 @@ def send(mail: Mail, subject: str, body: str, idempotency_key: str) -> str:
         headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
-            "Idempotency-Key": idempotency_key,
+            "Idempotency-Key": idempotencyKey,
         },
         method="POST",
     )

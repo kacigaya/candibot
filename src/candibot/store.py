@@ -51,12 +51,12 @@ class Store:
     def close(self) -> None:
         self.db.close()
 
-    def known(self, offer_id: str) -> bool:
-        return self.db.execute("SELECT 1 FROM offers WHERE id = ?", (offer_id,)).fetchone() is not None
+    def known(self, offerId: str) -> bool:
+        return self.db.execute("SELECT 1 FROM offers WHERE id = ?", (offerId,)).fetchone() is not None
 
     def add(self, offer: Offer) -> None:
         now = _now()
-        status = "new" if offer.on_site else "external"
+        status = "new" if offer.onSite else "external"
         with self.db:
             self.db.execute(
                 "INSERT OR IGNORE INTO offers"
@@ -69,14 +69,14 @@ class Store:
                     offer.company,
                     offer.location,
                     offer.description,
-                    int(offer.on_site),
+                    int(offer.onSite),
                     status,
                     now,
                     now,
                 ),
             )
 
-    def by_status(self, status: str, limit: int | None = None) -> list[sqlite3.Row]:
+    def byStatus(self, status: str, limit: int | None = None) -> list[sqlite3.Row]:
         sql = "SELECT * FROM offers WHERE status = ? ORDER BY score DESC, seen_at"
         params: tuple = (status,)
         if limit is not None:
@@ -84,21 +84,21 @@ class Store:
             params += (limit,)
         return self.db.execute(sql, params).fetchall()
 
-    def scored(self, offer_id: str, score: int, reason: str, letter: str, min_score: int) -> None:
-        status = "drafted" if score >= min_score else "rejected"
+    def scored(self, offerId: str, score: int, reason: str, letter: str, minScore: int) -> None:
+        status = "drafted" if score >= minScore else "rejected"
         with self.db:
             self.db.execute(
                 "UPDATE offers SET status = ?, score = ?, reason = ?, letter = ?, updated_at = ? WHERE id = ?",
-                (status, score, reason, letter, _now(), offer_id),
+                (status, score, reason, letter, _now(), offerId),
             )
 
-    def set_status(self, offer_id: str, status: str, detail: str = "") -> None:
+    def setStatus(self, offerId: str, status: str, detail: str = "") -> None:
         if status not in STATUSES:
             raise ValueError(status)
         with self.db:
             self.db.execute(
                 "UPDATE offers SET status = ?, detail = ?, updated_at = ? WHERE id = ?",
-                (status, detail, _now(), offer_id),
+                (status, detail, _now(), offerId),
             )
 
     def since(self, iso: str) -> list[sqlite3.Row]:

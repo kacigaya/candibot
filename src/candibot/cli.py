@@ -1,4 +1,4 @@
-"""Bot de candidature en alternance sur HelloWork.
+"""Bot de candidature sur HelloWork (CDI, CDD, alternance, stage…).
 
 candibot run            cherche, note et rédige, sans rien envoyer
 candibot run --send     envoie aussi les candidatures prêtes
@@ -33,7 +33,9 @@ async def collect(page, cfg: Config, store: Store) -> None:
     errors = 0
     for query in cfg.search.queries:
         try:
-            ids = await hellowork.search(page, query, cfg.search.location, cfg.search.pages)
+            ids = await hellowork.search(
+                page, query, cfg.search.location, cfg.search.contracts, cfg.search.pages
+            )
         except Exception as exc:  # noqa: BLE001
             errors += 1
             log(f"« {query} » : recherche impossible ({str(exc).splitlines()[0]})")
@@ -43,19 +45,19 @@ async def collect(page, cfg: Config, store: Store) -> None:
         errors = 0
         fresh = [i for i in ids if not store.known(i)]
         log(f"« {query} » : {len(ids)} offres, {len(fresh)} nouvelles")
-        for offer_id in fresh:
+        for offerId in fresh:
             try:
-                offer = await hellowork.fetch_offer(page, offer_id)
+                offer = await hellowork.fetchOffer(page, offerId)
             except Exception as exc:  # noqa: BLE001
                 errors += 1
-                log(f"  {offer_id} : fiche inaccessible ({str(exc).splitlines()[0]})")
+                log(f"  {offerId} : fiche inaccessible ({str(exc).splitlines()[0]})")
                 if errors >= MAX_CONSECUTIVE_ERRORS:
                     log(f"{errors} erreurs d'affilée : collecte interrompue")
                     return
                 continue
             errors = 0
             if offer is None:
-                log(f"  {offer_id} : fiche illisible (expirée ou balisage changé), ignorée")
+                log(f"  {offerId} : fiche illisible (expirée ou balisage changé), ignorée")
                 continue
             store.add(offer)
             await asyncio.sleep(random.uniform(1, 3))
@@ -65,18 +67,19 @@ def score(cfg: Config, store: Store) -> None:
     for tool in ("opencode", "bwrap"):
         if shutil.which(tool) is None:
             raise SystemExit(f"`{tool}` introuvable dans le PATH (ajouter ~/.local/bin pour cron)")
-    # Les offres exclues ne coûtent pas d'appel à Claude : on les écarte avant la limite max_scored.
+    # Les offres exclues ne coûtent pas d'appel au modèle : on les écarte avant la limite max_scored.
     # Les lettres prêtes sont revérifiées aussi, pour qu'un nom ajouté à la liste prenne effet
     # avant le prochain envoi.
-    for row in [*store.by_status("new"), *store.by_status("drafted")]:
+    for row in [*store.byStatus("new"), *store.byStatus("drafted")]:
         if cfg.search.excluded(row["company"]):
-            store.scored(row["id"], 0, EXCLUDED_REASON, "", cfg.search.min_score)
-    rows = store.by_status("new", cfg.search.max_scored)
+            store.scored(row["id"], 0, EXCLUDED_REASON, "", cfg.search.minScore)
+    rows = store.byStatus("new", cfg.search.maxScored)
     log(f"notation de {len(rows)} offres")
     for row in rows:
         try:
             result = llm.evaluate(
                 cfg.candidate,
+                cfg.search,
                 cfg.models,
                 title=row["title"],
                 company=row["company"],
@@ -86,17 +89,17 @@ def score(cfg: Config, store: Store) -> None:
         except Exception as exc:  # noqa: BLE001 - l'offre reste "new" et sera retentée au prochain passage
             log(f"  {row['id']} : notation impossible ({exc})")
             continue
-        store.scored(row["id"], result.score, result.reason, result.letter, cfg.search.min_score)
+        store.scored(row["id"], result.score, result.reason, result.letter, cfg.search.minScore)
         log(f"  {result.score}/10 {row['title']} · {row['company']}")
 
 
-def code_waiter(path: Path, timeout_s: int = 900):
+def codeWaiter(path: Path, timeoutS: int = 900):
     """Fournisseur de code HelloWork : attend que les 6 chiffres soient écrits dans `path`."""
 
     async def wait() -> str | None:
         path.unlink(missing_ok=True)  # jamais un vieux code d'une tentative précédente
         log(f"HelloWork demande le code envoyé par email : écrire les 6 chiffres dans {path}")
-        for _ in range(timeout_s // 3):
+        for _ in range(timeoutS // 3):
             if path.is_file():
                 code = path.read_text(encoding="utf-8").strip()
                 path.unlink()
@@ -109,17 +112,17 @@ def code_waiter(path: Path, timeout_s: int = 900):
     return wait
 
 
-async def send_applications(session: WebSkrapSession, page, cfg: Config, store: Store, otp=None) -> None:
-    rows = store.by_status("drafted", cfg.search.max_applications)
-    shots = cfg.data_dir / "shots"
+async def sendApplications(session: WebSkrapSession, page, cfg: Config, store: Store, otp=None) -> None:
+    rows = store.byStatus("drafted", cfg.search.maxApplications)
+    shots = cfg.dataDir / "shots"
     shots.mkdir(parents=True, exist_ok=True)
     c = cfg.candidate
     for n, row in enumerate(rows):
         if n:
-            await asyncio.sleep(random.uniform(*cfg.search.pause_seconds))
+            await asyncio.sleep(random.uniform(*cfg.search.pauseSeconds))
         # Marqué avant l'envoi : si le processus meurt en cours de route, l'offre
         # n'est pas renvoyée au passage suivant (pas de candidature en double).
-        store.set_status(row["id"], "needs_review", "envoi interrompu avant confirmation")
+        store.setStatus(row["id"], "needs_review", "envoi interrompu avant confirmation")
         try:
             result = await hellowork.apply(
                 session,
@@ -127,19 +130,19 @@ async def send_applications(session: WebSkrapSession, page, cfg: Config, store: 
                 row["url"],
                 title=row["title"],
                 company=row["company"],
-                first_name=c.first_name,
-                last_name=c.last_name,
+                firstName=c.firstName,
+                lastName=c.lastName,
                 email=c.email,
-                cv_pdf=c.cv_pdf,
+                cvPdf=c.cvPdf,
                 letter=row["letter"],
                 screenshot=shots / f"{row['id']}.png",
                 answers=cfg.answers,
                 otp=otp,
             )
-            store.set_status(row["id"], result.status, result.detail)
+            store.setStatus(row["id"], result.status, result.detail)
             log(f"  {result.status} : {row['title']} · {row['company']} ({result.detail})")
         except Exception as exc:  # noqa: BLE001 - une offre cassée ne doit pas arrêter les suivantes
-            store.set_status(row["id"], "failed", str(exc).splitlines()[0][:300])
+            store.setStatus(row["id"], "failed", str(exc).splitlines()[0][:300])
             log(f"  échec : {row['title']} · {row['company']} ({exc})")
             continue  # "failed" : rien n'est parti, pas de confirmation
         if result.status in ("applied", "needs_review"):  # sinon rien n'est parti
@@ -160,27 +163,27 @@ def notify(cfg: Config, row, status: str, detail: str) -> None:
         log(f"  confirmation email impossible ({exc})")
 
 
-async def run(cfg: Config, send: bool, wait_code: bool = False) -> None:
+async def run(cfg: Config, send: bool, waitCode: bool = False) -> None:
     started = datetime.now(UTC).isoformat(timespec="seconds")
-    store = Store(cfg.data_dir / "candibot.db")
+    store = Store(cfg.dataDir / "candibot.db")
     browser = SessionConfig(
         driver="patchright",
         channel="chromium",  # le canal "chrome" n'existe pas sur Linux ARM64
         headless=True,
         # Profil persistant : cookies et compte HelloWork conservés d'un passage à l'autre.
-        user_data_dir=cfg.data_dir / "browser",
+        user_data_dir=cfg.dataDir / "browser",
     )
     try:
         async with WebSkrapClient(default_config=browser) as client:
             session = await client.session("hellowork")
             page = session.context.pages[0] if session.context.pages else await session.context.new_page()
             await page.goto(hellowork.BASE + "/fr-fr/", wait_until="domcontentloaded")
-            await hellowork.dismiss_cookies(page)
+            await hellowork.dismissCookies(page)
             await collect(page, cfg, store)
             score(cfg, store)
             if send:
-                otp = code_waiter(cfg.data_dir / "otp.txt") if wait_code else None
-                await send_applications(session, page, cfg, store, otp)
+                otp = codeWaiter(cfg.dataDir / "otp.txt") if waitCode else None
+                await sendApplications(session, page, cfg, store, otp)
 
         body = mailer.render(store.since(started), send)
         print(body)
@@ -188,7 +191,7 @@ async def run(cfg: Config, send: bool, wait_code: bool = False) -> None:
             applied = sum(1 for r in store.since(started) if r["status"] == "applied")
             # Clé dérivée du début du passage : un nouvel essai du même passage n'envoie rien de plus.
             key = "recap-" + started.replace(":", "").replace("+", "")
-            mailer.send(cfg.mail, f"Alternance : {applied} candidature(s) envoyée(s)", body, key)
+            mailer.send(cfg.mail, f"candibot : {applied} candidature(s) envoyée(s)", body, key)
             log(f"récapitulatif envoyé à {cfg.mail.to}")
     finally:
         store.close()
@@ -198,10 +201,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="candibot", description=__doc__.splitlines()[0])
     parser.add_argument("--config", type=Path, default=Path("config.toml"))
     sub = parser.add_subparsers(dest="command", required=True)
-    run_p = sub.add_parser("run", help="chercher, noter, rédiger (et envoyer avec --send)")
-    run_p.add_argument("--send", action="store_true", help="envoyer réellement les candidatures prêtes")
-    run_p.add_argument(
+    runP = sub.add_parser("run", help="chercher, noter, rédiger (et envoyer avec --send)")
+    runP.add_argument("--send", action="store_true", help="envoyer réellement les candidatures prêtes")
+    runP.add_argument(
         "--wait-code",
+        dest="waitCode",
         action="store_true",
         help="si HelloWork demande le code reçu par email, l'attendre dans data/otp.txt (15 min)",
     )
@@ -210,12 +214,12 @@ def main() -> None:
 
     cfg = load(args.config)
     if args.command == "status":
-        store = Store(cfg.data_dir / "candibot.db")
+        store = Store(cfg.dataDir / "candibot.db")
         for status, count in sorted(store.counts().items()):
             print(f"{status:13} {count}")
         store.close()
         return
     try:
-        asyncio.run(run(cfg, args.send, args.wait_code))
+        asyncio.run(run(cfg, args.send, args.waitCode))
     except KeyboardInterrupt:
         sys.exit(130)

@@ -24,8 +24,8 @@ _SALARY = re.compile(r"salai|r[ée]mun[ée]ration|pr[ée]tention|attentes? (sala
 class Answers:
     civility: str  # texte de l'option, ex. "Madame"
     availability: str  # début du texte de l'option, ex. "immédiate"
-    salary_monthly: float  # brut mensuel visé, ex. 1867.02 (100 % du SMIC)
-    salary_text: str  # réponse aux champs libres sur la rémunération
+    salaryMonthly: float  # brut mensuel visé, ex. 1867.02 (100 % du SMIC)
+    salaryText: str  # réponse aux champs libres sur la rémunération
 
 
 def _norm(text: str) -> str:
@@ -47,7 +47,7 @@ def _range(text: str) -> tuple[float, float] | None:
     return min(numbers[:2]), max(numbers[:2])
 
 
-def _salary_option(options: list[tuple[str, str]], monthly: float) -> str | None:
+def _salaryOption(options: list[tuple[str, str]], monthly: float) -> str | None:
     """Tranche qui contient le salaire visé, en annuel ou en mensuel selon l'échelle des tranches."""
     ranges = [(value, r) for value, text in options if value and (r := _range(text))]
     if not ranges:
@@ -70,7 +70,7 @@ def answer(label: str, options: list[tuple[str, str]] | None, answers: Answers) 
         return SCHOOL
     if options is None:
         if _SALARY.search(label):
-            return answers.salary_text
+            return answers.salaryText
         if _AVAILABILITY.search(label):
             return f"Disponible {answers.availability}"
         return None
@@ -82,5 +82,5 @@ def answer(label: str, options: list[tuple[str, str]] | None, answers: Answers) 
         wanted = _norm(answers.availability)
         return next((value for value, text in choices if text.startswith(wanted)), None)
     if _SALARY.search(label):
-        return _salary_option(options, answers.salary_monthly)
+        return _salaryOption(options, answers.salaryMonthly)
     return None

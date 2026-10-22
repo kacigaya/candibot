@@ -23,7 +23,7 @@ Pose les questions à l'utilisateur, puis écris `config.toml` à partir de `con
 2. **Identité** (section `[candidate]`) :
    - prénom et nom (`first_name`, `last_name`). Ils signent les lettres et remplissent le formulaire HelloWork ;
    - email (`email`). HelloWork y envoie le code à 6 chiffres de la première candidature ;
-   - rythme de l'alternance (`rhythm`) et date de début (`availability`). Facultatifs : vides, les lettres n'en parlent pas.
+   - date de début (`availability`) et, en alternance seulement, rythme (`rhythm`). Facultatifs : vides, les lettres n'en parlent pas.
 
 3. **CV.** Demande le chemin du CV PDF. Copie-le dans `data/cv.pdf`. Vérifie qu'il fait 2 Mo au plus (limite HelloWork). Il faut aussi une version texte dans `data/cv.md` :
    - si l'utilisateur en a une, copie-la ;
@@ -32,13 +32,14 @@ Pose les questions à l'utilisateur, puis écris `config.toml` à partir de `con
 4. **Recherche** (section `[search]`) :
    - métiers recherchés (`queries`) : 2 à 4 requêtes courtes, comme sur HelloWork ;
    - lieu (`location`) : ville, département ou région ;
+   - types de contrat (`contracts`, obligatoire) : un ou plusieurs parmi `CDI`, `CDD`, `Intérim`, `Stage`, `Alternance`, `Indépendant`, `Freelance`, `Franchise`, `Associé`, `Fonctionnaire`, `Stage de lycée`. Écris les valeurs exactement ainsi ;
    - note minimale (`min_score`, défaut 7) et nombre maximal de candidatures par passage (`max_applications`, défaut 10) ;
    - garde `pages`, `max_scored`, `pause_seconds` et `exclude_companies` par défaut, sauf demande contraire. Propose d'ajouter des écoles à `exclude_companies` si l'utilisateur en connaît.
 
 5. **Réponses aux recruteurs** (section `[answers]`) :
    - civilité (`civility`) : texte exact de l'option HelloWork, `Madame` ou `Monsieur` ;
    - disponibilité (`availability`) : début du texte de l'option, par exemple `immédiate` ;
-   - salaire brut mensuel visé (`salary_monthly`, nombre) et réponse libre (`salary_text`). Le minimum légal en apprentissage dépend de l'âge et de l'année de formation. Renvoie l'utilisateur vers service-public.gouv.fr s'il ne connaît pas son montant.
+   - salaire brut mensuel visé (`salary_monthly`, nombre) et réponse libre (`salary_text`). En alternance, le minimum légal dépend de l'âge et de l'année de formation : renvoie l'utilisateur vers service-public.gouv.fr s'il ne connaît pas son montant.
 
 6. **Emails** (section `[mail]`, facultative). Demande si l'utilisateur veut un récapitulatif par email après chaque passage :
    - non : laisse `inbox` et `to` vides. Le récapitulatif s'affiche dans le terminal ;
@@ -50,7 +51,7 @@ Pose les questions à l'utilisateur, puis écris `config.toml` à partir de `con
 
      La commande `curl` de création de boîte est dans la section « Utilisation » du README.
 
-7. **Profil du modèle.** Le prompt de notation (`SYSTEM` dans `src/candibot/llm.py`) vise un profil précis : Master 1, marketing et communication, Île-de-France. Compare-le aux réponses des étapes 2 à 4. S'il ne correspond pas, montre les lignes concernées à l'utilisateur et propose de les adapter. Ne modifie rien sans son accord.
+7. **Exclusions.** `exclude_companies` écarte les écoles qui recrutent pour leur cursus. Cette liste sert surtout en alternance et en stage. Pour un CDI ou un CDD seulement, propose de la vider.
 
 8. **Écriture.** Écris `config.toml` en gardant la structure et les commentaires de `config.example.toml`. Montre un résumé des valeurs à l'utilisateur, sans la clé API.
 
