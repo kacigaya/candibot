@@ -124,3 +124,49 @@ def testApplySkipsExternalOffer(tmp_path):
     result, posts = runApply(tmp_path, offerHtml=external)
     assert result.status == "external"
     assert posts == []
+
+
+POSTING = (
+    '<script type="application/ld+json">{"@type": "JobPosting", "title": "Chargé", "description": "x",'
+    ' "hiringOrganization": {"name": "ACME"}}</script>'
+)
+
+
+def runCheck(*, searchHtml: str, offerHtml: str) -> list[str]:
+    """Lance `hellowork.check` contre une recherche et une fiche simulées."""
+
+    async def handle(route: Route) -> None:
+        path = urlparse(route.request.url).path
+        if path.endswith("/recherche.html"):
+            await route.fulfill(content_type=HTML, body=searchHtml)
+        elif path.startswith("/fr-fr/emplois/"):
+            await route.fulfill(content_type=HTML, body=offerHtml)
+        else:
+            await route.fulfill(status=204, body="")
+
+    async def main():
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(args=["--no-sandbox"])
+            page = await browser.new_page()
+            await page.route("**/*", handle)
+            try:
+                return await hellowork.check(page, "marketing", "Paris", ("CDI",))
+            finally:
+                await browser.close()
+
+    return asyncio.run(main())
+
+
+SEARCH = '<html><body><div data-id-storage-item-id="1"></div></body></html>'
+
+
+def testCheckFindsFormWithoutSubmitting():
+    offer = OFFER.replace("{extra}", "").replace("<body>", f"<body>{POSTING}")
+    assert runCheck(searchHtml=SEARCH, offerHtml=offer) == []
+
+
+def testCheckReportsBrokenPages():
+    assert runCheck(searchHtml="<html><body></body></html>", offerHtml="")[0].startswith("recherche")
+    noForm = f"<html><body>{POSTING}<a data-cy='applyButtonHeader'>Postuler</a></body></html>"
+    problems = runCheck(searchHtml=SEARCH, offerHtml=noForm)
+    assert len(problems) == 1 and "formulaire introuvable" in problems[0]

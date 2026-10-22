@@ -77,6 +77,7 @@ uv run candibot run
 | `run --send` | Envoie aussi les candidatures prêtes |
 | `run --send --wait-code` | Idem, et attend le code HelloWork dans `data/otp.txt` pendant 15 minutes au plus |
 | `status` | Nombre d'offres par statut |
+| `check` | Vérifie les sélecteurs HelloWork : lit une recherche et une fiche, ouvre le formulaire sans le soumettre. Code de sortie 1 en cas de problème. |
 
 ### Première candidature
 
@@ -201,7 +202,7 @@ uv run ruff format --check .
 
 ## Limites
 
-- Les sélecteurs HelloWork ont été vérifiés le 24/09/2026. Si le site change, corrigez-les dans [`src/candibot/hellowork.py`](src/candibot/hellowork.py).
+- Les sélecteurs HelloWork ont été vérifiés le 22/10/2026. Lancez `uv run candibot check` pour les revérifier. Si le site change, corrigez-les dans [`src/candibot/hellowork.py`](src/candibot/hellowork.py).
 - « Mes candidatures » n'affiche pas l'identifiant de l'offre. La correspondance se fait donc sur le titre et l'entreprise d'une même carte. Seule la première page (les plus récentes) est lue.
 - Indeed renvoie 403 (Cloudflare) depuis les IP de datacenter, et Welcome to the Jungle exige un compte pour chercher. Ces deux sites ne sont pas gérés.
 

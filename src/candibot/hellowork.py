@@ -403,6 +403,37 @@ async def apply(
     return ApplyResult("needs_review", "absente de « Mes candidatures » après l'envoi")
 
 
+async def check(page: Page, query: str, location: str, contracts: tuple[str, ...]) -> list[str]:
+    """Vérifie les sélecteurs sur le site réel, sans rien envoyer. Renvoie les problèmes trouvés.
+
+    Lit une page de résultats, puis la première fiche à candidature HelloWork
+    parmi les 5 premières, et ouvre son formulaire sans le soumettre.
+    """
+    await page.goto(searchUrl(query, location, contracts, 1), wait_until="domcontentloaded")
+    await dismissCookies(page)
+    ids = parseSearch(await page.content())
+    if not ids:
+        return ["recherche : aucune offre trouvée (data-id-storage-item-id)"]
+    problems = []
+    for offerId in ids[:5]:
+        offer = await fetchOffer(page, offerId)
+        if offer is None:
+            problems.append(f"fiche {offerId} : illisible (ni JSON-LD JobPosting, ni repli HTML)")
+            continue
+        if not offer.onSite:
+            continue
+        zone = page.locator(APPLY)
+        try:
+            await page.click("[data-cy='applyButtonHeader'] >> nth=0", timeout=15_000)
+            await zone.locator("[data-cy='submitButton']").wait_for(state="attached", timeout=15_000)
+        except PlaywrightTimeout:
+            return [*problems, f"fiche {offerId} : formulaire introuvable ({APPLY} [data-cy='submitButton'])"]
+        if not await zone.locator("textarea[name='MotivationLetter']").count():
+            problems.append(f"fiche {offerId} : champ du message absent (textarea[name='MotivationLetter'])")
+        return problems
+    return [*problems, f"aucune candidature sur HelloWork parmi les offres {', '.join(ids[:5])}"]
+
+
 async def _settle(page: Page) -> None:
     """Les étapes arrivent par Turbo (fetch) : laisser la requête partir, puis attendre
     le calme réseau, que les traqueurs peuvent empêcher."""

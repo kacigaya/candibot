@@ -3,6 +3,7 @@
 candibot run            cherche, note et rédige, sans rien envoyer
 candibot run --send     envoie aussi les candidatures prêtes
 candibot status         compte les offres par statut
+candibot check          vérifie les sélecteurs HelloWork, sans rien envoyer
 """
 
 import argparse
@@ -163,20 +164,41 @@ def notify(cfg: Config, row, status: str, detail: str) -> None:
         log(f"  confirmation email impossible ({exc})")
 
 
-async def run(cfg: Config, send: bool, waitCode: bool = False) -> None:
-    started = datetime.now(UTC).isoformat(timespec="seconds")
-    store = Store(cfg.dataDir / "candibot.db")
-    browser = SessionConfig(
+def browserConfig(cfg: Config) -> SessionConfig:
+    return SessionConfig(
         driver="patchright",
         channel="chromium",  # le canal "chrome" n'existe pas sur Linux ARM64
         headless=True,
         # Profil persistant : cookies et compte HelloWork conservés d'un passage à l'autre.
         user_data_dir=cfg.dataDir / "browser",
     )
+
+
+async def openPage(session: WebSkrapSession):
+    return session.context.pages[0] if session.context.pages else await session.context.new_page()
+
+
+async def check(cfg: Config) -> bool:
+    """Vérifie les sélecteurs HelloWork sur la première requête. Vrai si tout est trouvé."""
+    async with WebSkrapClient(default_config=browserConfig(cfg)) as client:
+        page = await openPage(await client.session("hellowork"))
+        problems = await hellowork.check(
+            page, cfg.search.queries[0], cfg.search.location, cfg.search.contracts
+        )
+    for problem in problems:
+        log(f"problème : {problem}")
+    if not problems:
+        log("sélecteurs HelloWork OK")
+    return not problems
+
+
+async def run(cfg: Config, send: bool, waitCode: bool = False) -> None:
+    started = datetime.now(UTC).isoformat(timespec="seconds")
+    store = Store(cfg.dataDir / "candibot.db")
     try:
-        async with WebSkrapClient(default_config=browser) as client:
+        async with WebSkrapClient(default_config=browserConfig(cfg)) as client:
             session = await client.session("hellowork")
-            page = session.context.pages[0] if session.context.pages else await session.context.new_page()
+            page = await openPage(session)
             await page.goto(hellowork.BASE + "/fr-fr/", wait_until="domcontentloaded")
             await hellowork.dismissCookies(page)
             await collect(page, cfg, store)
@@ -210,6 +232,7 @@ def main() -> None:
         help="si HelloWork demande le code reçu par email, l'attendre dans data/otp.txt (15 min)",
     )
     sub.add_parser("status", help="nombre d'offres par statut")
+    sub.add_parser("check", help="vérifier les sélecteurs HelloWork, sans rien envoyer")
     args = parser.parse_args()
 
     cfg = load(args.config)
@@ -220,6 +243,8 @@ def main() -> None:
         store.close()
         return
     try:
+        if args.command == "check":
+            sys.exit(0 if asyncio.run(check(cfg)) else 1)
         asyncio.run(run(cfg, args.send, args.waitCode))
     except KeyboardInterrupt:
         sys.exit(130)
