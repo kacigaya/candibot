@@ -1,7 +1,7 @@
-"""Parcours `hellowork.apply` dans un vrai Chromium, contre des pages HelloWork simulées.
+"""Parcours `application.apply` dans un vrai Chromium, contre des pages HelloWork simulées.
 
 Les requêtes vers hellowork.com sont interceptées : aucun accès réseau. Le
-formulaire reprend les sélecteurs relevés sur le site (voir hellowork.py).
+formulaire reprend les sélecteurs relevés sur le site (voir application.py).
 """
 
 import asyncio
@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from patchright.async_api import Route, async_playwright
 
-from candibot import hellowork
+from candibot import application, hellowork
 from candibot.questions import Answers
 
 HTML = "text/html; charset=utf-8"
@@ -70,7 +70,7 @@ def runApply(tmp_path, *, offerHtml: str):
             page = await browser.new_page()
             await page.route("**/*", handle)
             try:
-                return await hellowork.apply(
+                return await application.apply(
                     FakeSession(),
                     page,
                     hellowork.offerUrl("1"),
@@ -133,7 +133,7 @@ POSTING = (
 
 
 def runCheck(*, searchHtml: str, offerHtml: str) -> list[str]:
-    """Lance `hellowork.check` contre une recherche et une fiche simulées."""
+    """Lance `application.check` contre une recherche et une fiche simulées."""
 
     async def handle(route: Route) -> None:
         path = urlparse(route.request.url).path
@@ -150,7 +150,7 @@ def runCheck(*, searchHtml: str, offerHtml: str) -> list[str]:
             page = await browser.new_page()
             await page.route("**/*", handle)
             try:
-                return await hellowork.check(page, "marketing", "Paris", ("CDI",))
+                return await application.check(page, "marketing", "Paris", ("CDI",))
             finally:
                 await browser.close()
 

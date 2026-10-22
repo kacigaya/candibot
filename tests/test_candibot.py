@@ -5,7 +5,7 @@ import urllib.error
 
 import pytest
 
-from candibot import hellowork, llm, mailer
+from candibot import application, hellowork, llm, mailer
 from candibot.config import Search
 from candibot.store import EXCLUDED_REASON, Store
 
@@ -255,10 +255,10 @@ def testIsListedMatchesTitleAndCompanyOnTheSameCard():
         "En cours d'envoi\nAlternant  Production de Contenus H/F\n\nMGEN\nParis - 75\nEnvoyée le 26 septembre",
         "Envoyée\nChargé de Communication H/F\nEgis Groupe\nGuyancourt",
     ]
-    assert hellowork.isListed(cards, "Alternant Production de Contenus H/F", "MGEN")
-    assert not hellowork.isListed(cards, "Alternant Production de Contenus H/F", "Egis Groupe")
-    assert not hellowork.isListed(cards, "Community Manager H/F", "MGEN")
-    assert hellowork.isListed(cards, "Chargé de Communication H/F", "Entreprise anonyme")
+    assert application.isListed(cards, "Alternant Production de Contenus H/F", "MGEN")
+    assert not application.isListed(cards, "Alternant Production de Contenus H/F", "Egis Groupe")
+    assert not application.isListed(cards, "Community Manager H/F", "MGEN")
+    assert application.isListed(cards, "Chargé de Communication H/F", "Entreprise anonyme")
 
 
 def answers():

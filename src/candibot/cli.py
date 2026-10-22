@@ -22,7 +22,7 @@ from pathlib import Path
 
 from webskrap import SessionConfig, WebSkrapClient, WebSkrapSession
 
-from candibot import hellowork, llm, mailer
+from candibot import application, hellowork, llm, mailer
 from candibot.config import Config, load
 from candibot.store import EXCLUDED_REASON, Store
 
@@ -135,7 +135,7 @@ async def sendApplications(session: WebSkrapSession, page, cfg: Config, store: S
         # n'est pas renvoyée au passage suivant (pas de candidature en double).
         store.setStatus(row["id"], "needs_review", "envoi interrompu avant confirmation")
         try:
-            result = await hellowork.apply(
+            result = await application.apply(
                 session,
                 page,
                 row["url"],
@@ -231,7 +231,7 @@ async def check(cfg: Config) -> bool:
     """Vérifie les sélecteurs HelloWork sur la première requête. Vrai si tout est trouvé."""
     async with WebSkrapClient(default_config=browserConfig(cfg)) as client:
         page = await openPage(await client.session("hellowork"))
-        problems = await hellowork.check(
+        problems = await application.check(
             page, cfg.search.queries[0], cfg.search.location, cfg.search.contracts
         )
     for problem in problems:
