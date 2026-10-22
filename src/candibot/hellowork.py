@@ -290,7 +290,7 @@ async def myApplications(page: Page) -> list[str]:
 async def apply(
     session: WebSkrapSession,
     page: Page,
-    offer_url_: str,
+    url: str,
     *,
     title: str,
     company: str,
@@ -325,7 +325,7 @@ async def apply(
     except RuntimeError:
         pass  # pas encore de compte connecté : la première candidature le créera
 
-    await page.goto(offer_url_, wait_until="domcontentloaded")
+    await page.goto(url, wait_until="domcontentloaded")
     await dismissCookies(page)
     content = await page.content()
     if EXTERNAL.search(content):

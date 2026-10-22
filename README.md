@@ -196,6 +196,8 @@ Un passage échoue s'il ne trouve aucune offre dans les résultats, ou si, avec 
 
 `tests/test_apply_browser.py` parcourt le formulaire de candidature dans Chromium, contre des pages HelloWork simulées, sans réseau. Il faut le Chromium de Patchright.
 
+Le nommage suit une convention propre au projet (camelCase), vérifiée par `tests/test_naming.py`. Voir [CONTRIBUTING.md](CONTRIBUTING.md).
+
 La CI (`.github/workflows/ci.yml`) lance ces trois vérifications à chaque push sur `main` et sur chaque pull request.
 
 ```bash
