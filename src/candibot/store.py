@@ -1,7 +1,7 @@
 """Suivi des offres en SQLite : une ligne par offre HelloWork, jamais traitée deux fois."""
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -10,6 +10,7 @@ from candibot.hellowork import Offer
 # Cycle de vie d'une offre :
 #   new -> rejected            note trop basse
 #   new -> external            candidature seulement sur le site du recruteur
+#   external -> rejected       notée trop basse ou entreprise exclue (sinon reste external, notée)
 #   new -> drafted             lettre prête, en attente d'envoi
 #   drafted -> rejected        lettre refusée avec `candibot review`
 #   drafted -> applied         candidature confirmée par HelloWork
@@ -22,6 +23,9 @@ EXCLUDED_REASON = "organisme de formation exclu (config)"
 # deux postes distincts au même intitulé ont des textes bien plus éloignés.
 DUPLICATE_SIMILARITY = 0.9
 STATUSES = ("new", "rejected", "external", "drafted", "applied", "needs_review", "failed")
+# Réponse du recruteur, saisie à la main avec `candibot outcome` (colonne `outcome`).
+OUTCOMES = ("relancee", "entretien", "refus", "acceptee")
+FOLLOW_UP_DAYS = 14  # sans réponse après ce délai, la candidature est à relancer
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS offers (
@@ -38,9 +42,15 @@ CREATE TABLE IF NOT EXISTS offers (
     letter      TEXT,
     detail      TEXT,
     seen_at     TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    updated_at  TEXT NOT NULL,
+    query       TEXT,
+    outcome     TEXT
 )
 """
+# Colonnes ajoutées après la première version : ajoutées en place aux bases existantes.
+# `query` : requête qui a trouvé l'offre en premier (NULL pour les offres plus anciennes).
+# `outcome` : réponse du recruteur (OUTCOMES), NULL tant qu'aucune n'est saisie.
+ADDED_COLUMNS = ("query", "outcome")
 
 # Issue de chaque passage, pour l'alerte après plusieurs échecs d'affilée.
 RUNS_SCHEMA = """
@@ -60,8 +70,20 @@ class Store:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
-        self.db.execute(SCHEMA)
-        self.db.execute(RUNS_SCHEMA)
+        # Sous verrou d'écriture : deux processus qui ouvrent une ancienne base en même temps
+        # n'ajoutent pas deux fois la même colonne.
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.db.execute(SCHEMA)
+            self.db.execute(RUNS_SCHEMA)
+            columns = {row[1] for row in self.db.execute("PRAGMA table_info(offers)")}
+            for name in ADDED_COLUMNS:
+                if name not in columns:
+                    self.db.execute(f"ALTER TABLE offers ADD COLUMN {name} TEXT")
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
 
     def close(self) -> None:
         self.db.close()
@@ -69,14 +91,14 @@ class Store:
     def known(self, offerId: str) -> bool:
         return self.db.execute("SELECT 1 FROM offers WHERE id = ?", (offerId,)).fetchone() is not None
 
-    def add(self, offer: Offer) -> None:
+    def add(self, offer: Offer, query: str | None = None) -> None:
         now = _now()
         status = "new" if offer.onSite else "external"
         with self.db:
             self.db.execute(
                 "INSERT OR IGNORE INTO offers"
-                " (id, url, title, company, location, description, on_site, status, seen_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " (id, url, title, company, location, description, on_site, status, seen_at, updated_at, query)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     offer.id,
                     offer.url,
@@ -88,6 +110,7 @@ class Store:
                     status,
                     now,
                     now,
+                    query,
                 ),
             )
 
@@ -99,8 +122,14 @@ class Store:
             params += (limit,)
         return self.db.execute(sql, params).fetchall()
 
-    def scored(self, offerId: str, score: int, reason: str, letter: str, minScore: int) -> None:
-        status = "drafted" if score >= minScore else "rejected"
+    def scored(
+        self, offerId: str, score: int, reason: str, letter: str, minScore: int, passing: str = "drafted"
+    ) -> None:
+        """Enregistre la note. Au-dessus de `minScore`, l'offre passe en `passing`, sinon en `rejected`.
+
+        `passing` vaut `external` pour une offre à faire à la main : elle reste à faire, notée.
+        """
+        status = passing if score >= minScore else "rejected"
         with self.db:
             self.db.execute(
                 "UPDATE offers SET status = ?, score = ?, reason = ?, letter = ?, updated_at = ? WHERE id = ?",
@@ -216,6 +245,31 @@ class Store:
     def lastRun(self) -> str | None:
         row = self.db.execute("SELECT MAX(started) FROM runs").fetchone()
         return row[0]
+
+    def unscoredExternal(self) -> list[sqlite3.Row]:
+        """Offres à faire à la main pas encore notées, les plus récentes d'abord."""
+        return self.db.execute(
+            "SELECT * FROM offers WHERE status = 'external' AND score IS NULL ORDER BY seen_at DESC"
+        ).fetchall()
+
+    def setOutcome(self, offerId: str, outcome: str) -> bool:
+        """Note la réponse du recruteur pour une candidature envoyée. Faux si l'offre n'est pas `applied`."""
+        if outcome not in OUTCOMES:
+            raise ValueError(outcome)
+        with self.db:
+            cursor = self.db.execute(
+                "UPDATE offers SET outcome = ? WHERE id = ? AND status = 'applied'", (outcome, offerId)
+            )
+        return cursor.rowcount == 1
+
+    def followUps(self, now: datetime) -> list[sqlite3.Row]:
+        """Candidatures envoyées depuis FOLLOW_UP_DAYS jours ou plus, sans réponse notée."""
+        cutoff = (now - timedelta(days=FOLLOW_UP_DAYS)).isoformat(timespec="seconds")
+        return self.db.execute(
+            "SELECT * FROM offers WHERE status = 'applied' AND outcome IS NULL AND updated_at <= ?"
+            " ORDER BY updated_at",
+            (cutoff,),
+        ).fetchall()
 
     def counts(self) -> dict[str, int]:
         rows = self.db.execute("SELECT status, COUNT(*) FROM offers GROUP BY status").fetchall()

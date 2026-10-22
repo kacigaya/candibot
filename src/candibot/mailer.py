@@ -7,7 +7,7 @@ from sqlite3 import Row
 from urllib.parse import quote
 
 from candibot.config import Mail
-from candibot.store import EXCLUDED_REASON
+from candibot.store import EXCLUDED_REASON, FOLLOW_UP_DAYS
 
 SECTIONS = [
     ("applied", "Candidatures envoyées"),
@@ -19,7 +19,8 @@ SECTIONS = [
 ]
 
 
-def render(rows: list[Row], sent: bool) -> str:
+def render(rows: list[Row], sent: bool, followUps: list[Row] = ()) -> str:
+    """Récapitulatif d'un passage. `followUps` : candidatures anciennes sans réponse, à relancer."""
     mode = "envoi réel" if sent else "simulation, rien n'a été envoyé"
     lines = [f"Passage du bot de candidature ({mode}).", ""]
     excluded = [r for r in rows if r["reason"] == EXCLUDED_REASON]
@@ -37,8 +38,20 @@ def render(rows: list[Row], sent: bool) -> str:
                 lines.append(f"  {r['reason']}")
             if r["detail"]:
                 lines.append(f"  -> {r['detail']}")
-            if status in ("applied", "drafted") and r["letter"]:
+            # La lettre d'une offre `external` sert à postuler à la main sur le site du recruteur.
+            if status in ("applied", "drafted", "external") and r["letter"]:
                 lines.extend("    " + line for line in r["letter"].splitlines())
+        lines.append("")
+    if followUps:
+        lines.append(
+            f"== À relancer : envoyées il y a {FOLLOW_UP_DAYS} jours ou plus, sans réponse ({len(followUps)}) =="
+        )
+        for r in followUps:
+            lines.append(
+                f"- {r['title']} · {r['company']} · envoyée le {r['updated_at'][:10]} · id {r['id']}"
+            )
+            lines.append(f"  {r['url']}")
+        lines.append("  Notez la réponse avec `candibot outcome ID relancee|entretien|refus|acceptee`.")
         lines.append("")
     if excluded:
         lines.append(f"{len(excluded)} offre(s) d'organismes de formation exclus (search.exclude_companies).")

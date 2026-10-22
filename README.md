@@ -28,6 +28,9 @@
 - Consulte la page « Mes candidatures » avant et après chaque envoi, pour ne jamais postuler deux fois
 - Répond aux questions courantes des recruteurs : civilité, disponibilité, salaire et téléphone
 - Envoie par email une confirmation par candidature et un récapitulatif du passage, via [AgentMail](https://docs.agentmail.to)
+- Note aussi les offres à faire à la main et rédige leur lettre
+- Rappelle les candidatures sans réponse après 14 jours, et garde les réponses des recruteurs que vous notez
+- Met à jour un tableau de bord HTML après chaque passage
 - Tourne une fois par jour avec un timer systemd
 
 > [!IMPORTANT]
@@ -79,7 +82,8 @@ uv run candibot run
 | `status` | Nombre d'offres par statut et date du dernier passage |
 | `review` | Relit les lettres prêtes une par une : garder, modifier dans `$EDITOR` (nano par défaut) ou refuser |
 | `retry ID…` | Remet des offres `failed` ou `needs_review` dans la file d'envoi (`drafted`, ou `new` sans lettre) |
-| `dashboard` | Écrit un tableau de bord HTML dans `data/dashboard.html` : chiffres clés, envois et offres par jour, notes, offres à vérifier ou à faire à la main. Option `--out` pour un autre fichier. |
+| `dashboard` | Écrit un tableau de bord HTML dans `data/dashboard.html` : chiffres clés, envois et offres par jour, notes, offres à vérifier, à relancer ou à faire à la main, réponses et résultats par requête. Option `--out` pour un autre fichier. |
+| `outcome ID RÉPONSE` | Note la réponse du recruteur à une candidature envoyée : `relancee`, `entretien`, `refus` ou `acceptee` |
 | `check` | Vérifie les sélecteurs HelloWork : lit une recherche et une fiche, ouvre le formulaire sans le soumettre. Code de sortie 1 en cas de problème. |
 
 ### Tableau de bord
@@ -87,7 +91,16 @@ uv run candibot run
 1. Lancez `uv run candibot dashboard`.
 2. Ouvrez `data/dashboard.html` dans un navigateur. Sur un serveur, copiez d'abord le fichier sur votre poste, par exemple avec `scp`.
 
-La page est statique : aucun serveur, aucun JavaScript. Elle contient vos candidatures : ne la publiez pas. Relancez la commande pour la mettre à jour.
+La page est statique : aucun serveur, aucun JavaScript. Elle contient vos candidatures : ne la publiez pas. Chaque `run` la met à jour. Lancez `dashboard` pour la mettre à jour entre deux passages.
+
+Le tableau « Par requête » montre, pour chaque requête de `search.queries`, les offres trouvées, leur note moyenne et les candidatures envoyées. Une requête à la note moyenne basse amène surtout des offres hors profil : remplacez-la. Les offres vues avant cette fonction sont regroupées à part.
+
+### Suivi des réponses
+
+1. Quand un recruteur répond, lancez `uv run candibot outcome ID entretien` (ou `refus`, `acceptee`).
+2. Après une relance de votre part, lancez `uv run candibot outcome ID relancee`.
+
+Une candidature envoyée depuis 14 jours ou plus, sans réponse notée, apparaît dans « À relancer » : dans le récapitulatif email et dans le tableau de bord. L'identifiant `ID` y figure.
 
 ### Première candidature
 
@@ -127,7 +140,7 @@ Ces emails vous sont destinés. candibot n'écrit jamais aux recruteurs.
 4. **Envoi** (seulement avec `--send`). candibot remplit l'identité, le CV, le message et les CGU, puis avance d'étape en étape. Il s'arrête en `needs_review`, avec une capture d'écran de chaque étape, si une étape contient un champ obligatoire qu'il ne sait pas remplir ou si la candidature n'apparaît pas dans « Mes candidatures ».
 5. **Compte rendu.** Un email par candidature `applied` ou `needs_review`, avec l'offre et le message envoyé, puis le récapitulatif du passage. Chaque envoi porte une clé d'idempotence : un nouvel essai du même passage n'envoie pas de doublon.
 
-Chaque offre n'est traitée qu'une fois. Le suivi est stocké dans `data/candibot.db`. Les offres qui renvoient vers le site du recruteur (`external`) sont listées dans le récapitulatif, pour une candidature à la main.
+Chaque offre n'est traitée qu'une fois. Le suivi est stocké dans `data/candibot.db`. Les offres qui renvoient vers le site du recruteur (`external`) sont notées aussi, avec le budget de `max_scored` qui reste après les nouvelles offres. Une note sous `min_score` les écarte. Les autres sont listées dans le récapitulatif avec leur lettre, pour une candidature à la main.
 
 ### Bac à sable
 
@@ -152,7 +165,7 @@ Ce contrôle a lieu avant la notation et avant chaque envoi. Les doublons écart
 | --- | --- |
 | `new` | Offre lue, pas encore notée |
 | `rejected` | Note inférieure à `min_score`, entreprise exclue ou annonce d'école |
-| `external` | Candidature uniquement sur le site du recruteur |
+| `external` | Candidature uniquement sur le site du recruteur. Notée et accompagnée d'une lettre, à envoyer à la main. |
 | `drafted` | Lettre prête, en attente de `--send` |
 | `applied` | Candidature confirmée dans « Mes candidatures » |
 | `needs_review` | Envoi non confirmé. Vérifiez `data/shots/<id>.png` et votre espace HelloWork, puis relancez avec `candibot retry <id>`. |

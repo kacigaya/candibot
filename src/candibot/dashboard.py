@@ -9,11 +9,19 @@ from html import escape
 from sqlite3 import Row
 from zoneinfo import ZoneInfo
 
-from candibot.store import EXCLUDED_REASON
+from candibot.store import EXCLUDED_REASON, FOLLOW_UP_DAYS
 
 DAYS = 30  # fenêtre des graphiques par jour
 STALE_DAYS = 2  # le timer lance un passage par jour : au-delà, il est arrêté ou en panne
 LIST_LIMIT = 20  # lignes par tableau
+OUTCOME_LABELS = {
+    "relancee": "Relancée",
+    "entretien": "Entretien",
+    "refus": "Refus",
+    "acceptee": "Acceptée",
+    None: "Sans réponse",
+}
+NO_QUERY = "Avant le suivi des requêtes"  # offres enregistrées avant la colonne `query`
 # HelloWork ne publie que des offres en France. Le serveur tourne souvent en UTC :
 # sans fuseau fixe, un envoi à 0 h 30 heure de Paris tomberait la veille.
 TIMEZONE = ZoneInfo("Europe/Paris")
@@ -80,6 +88,7 @@ summary { cursor: pointer; color: var(--muted); font-size: 0.875rem; margin-top:
 details table { margin-top: 0.5rem; }
 .ok { color: var(--good); } .ko { color: var(--bad); }
 .empty { color: var(--muted); margin: 0; }
+.letter { white-space: pre-wrap; font-size: 0.8125rem; margin: 0.5rem 0 0; }
 .warn { border: 1px solid var(--bad); border-radius: 8px; padding: 0.75rem 1rem; margin: 0 0 1.5rem; }
 """
 
@@ -173,21 +182,48 @@ def _staleWarning(runs: list[Row], now: datetime) -> str:
     )
 
 
+def _average(values: list[int]) -> str:
+    return f"{sum(values) / len(values):.1f}".replace(".", ",") if values else "–"
+
+
+def _queryRows(offers: list[Row]) -> list[list[str]]:
+    """Par requête : offres trouvées, note moyenne et candidatures envoyées. Montre les requêtes à revoir."""
+    groups: dict[str, list[Row]] = {}
+    for r in offers:
+        groups.setdefault(r["query"] or NO_QUERY, []).append(r)
+    rows = []
+    for query, group in sorted(groups.items(), key=lambda item: len(item[1]), reverse=True):
+        scores = [r["score"] for r in group if r["score"] is not None and r["reason"] != EXCLUDED_REASON]
+        sent = sum(1 for r in group if r["status"] == "applied")
+        rows.append([escape(query), str(len(group)), _average(scores), str(sent)])
+    return rows
+
+
 def render(offers: list[Row], runs: list[Row], now: datetime) -> str:
     """Page HTML complète. `now` fixe la fin de la fenêtre des graphiques."""
     counts = Counter(r["status"] for r in offers)
     excluded = sum(1 for r in offers if r["reason"] == EXCLUDED_REASON)
     toCheck = [r for r in offers if r["status"] in ("needs_review", "failed")]
+    # Les mieux notées d'abord ; les offres pas encore notées ensuite, les plus récentes en tête.
     external = sorted(
-        (r for r in offers if r["status"] == "external"), key=lambda r: r["seen_at"], reverse=True
+        (r for r in offers if r["status"] == "external"),
+        key=lambda r: (r["score"] if r["score"] is not None else -1, r["seen_at"]),
+        reverse=True,
     )
     applied = sorted(
         (r for r in offers if r["status"] == "applied"), key=lambda r: r["updated_at"], reverse=True
     )
 
+    cutoff = (now - timedelta(days=FOLLOW_UP_DAYS)).isoformat(timespec="seconds")
+    followUps = [r for r in applied if r["outcome"] is None and r["updated_at"] <= cutoff]
+    followUps.reverse()  # les plus anciennes d'abord : les plus urgentes à relancer
+    outcomes = Counter(r["outcome"] for r in applied)
+
     tiles = [
         (len(offers), "offres vues"),
         (counts["applied"], "candidatures envoyées"),
+        (outcomes["entretien"] + outcomes["acceptee"], "entretiens ou acceptations"),
+        (len(followUps), "à relancer"),
         (counts["drafted"], "lettres prêtes"),
         (len(toCheck), "à vérifier"),
         (counts["external"], "sur le site du recruteur"),
@@ -222,17 +258,40 @@ def render(offers: list[Row], runs: list[Row], now: datetime) -> str:
     ]
     externalRows = [
         [
+            str(r["score"]) if r["score"] is not None else "–",
             _day(r["seen_at"]).strftime("%d/%m/%Y"),
-            _link(r),
+            # La lettre reste ici : l'email du passage n'est pas toujours activé ou reçu.
+            _link(r)
+            + (
+                f'<details><summary>Lettre</summary><p class="letter">{escape(r["letter"])}</p></details>'
+                if r["letter"]
+                else ""
+            ),
             escape(r["company"]),
             escape(r["location"]),
         ]
         for r in external[:LIST_LIMIT]
     ]
     appliedRows = [
-        [_day(r["updated_at"]).strftime("%d/%m/%Y"), str(r["score"]), _link(r), escape(r["company"])]
+        [
+            _day(r["updated_at"]).strftime("%d/%m/%Y"),
+            str(r["score"]),
+            _link(r),
+            escape(r["company"]),
+            OUTCOME_LABELS.get(r["outcome"], escape(r["outcome"] or "")),
+        ]
         for r in applied[:LIST_LIMIT]
     ]
+    followUpRows = [
+        [
+            _day(r["updated_at"]).strftime("%d/%m/%Y"),
+            f"<code>{escape(r['id'])}</code>",
+            _link(r),
+            escape(r["company"]),
+        ]
+        for r in followUps[:LIST_LIMIT]
+    ]
+    outcomeRows = [[label, str(outcomes[key])] for key, label in OUTCOME_LABELS.items() if outcomes[key]]
     runRows = [
         [
             datetime.fromisoformat(r["started"]).astimezone(TIMEZONE).strftime("%d/%m/%Y %H:%M"),
@@ -272,8 +331,15 @@ def render(offers: list[Row], runs: list[Row], now: datetime) -> str:
 {_section("À vérifier", _table(["ID", "Offre", "Détail"], checkRows, "Rien à vérifier."), "Vérifiez <code>data/shots/&lt;id&gt;.png</code>, puis <code>candibot retry &lt;id&gt;</code>.")}
 </div>
 <div class="grid">
-{_section("À faire à la main", _table(["Vue le", "Offre", "Entreprise", "Lieu"], externalRows, "Aucune offre."), f"Candidature sur le site du recruteur. {LIST_LIMIT} plus récentes au plus.")}
-{_section("Dernières candidatures", _table(["Date", "#Note", "Offre", "Entreprise"], appliedRows, "Aucune candidature envoyée."), f"{LIST_LIMIT} plus récentes au plus.")}
+{_section("À relancer", _table(["Envoyée le", "ID", "Offre", "Entreprise"], followUpRows, "Rien à relancer."), f"Envoyées il y a {FOLLOW_UP_DAYS} jours ou plus, sans réponse notée. Notez-la avec <code>candibot outcome &lt;id&gt; relancee|entretien|refus|acceptee</code>.")}
+{_section("Réponses des recruteurs", _table(["Réponse", "#Candidatures"], outcomeRows, "Aucune candidature envoyée."))}
+</div>
+<div class="grid">
+{_section("Par requête", _table(["Requête", "#Offres", "#Note moyenne", "#Envoyées"], _queryRows(offers), "Aucune offre."), "Une offre compte pour la première requête qui l'a trouvée. Note moyenne hors écoles exclues.")}
+</div>
+<div class="grid">
+{_section("À faire à la main", _table(["#Note", "Vue le", "Offre", "Entreprise", "Lieu"], externalRows, "Aucune offre."), f"Candidature sur le site du recruteur. {LIST_LIMIT} meilleures notes au plus. Ouvrez « Lettre » pour la copier.")}
+{_section("Dernières candidatures", _table(["Date", "#Note", "Offre", "Entreprise", "Réponse"], appliedRows, "Aucune candidature envoyée."), f"{LIST_LIMIT} plus récentes au plus.")}
 </div>
 </main>
 </body>

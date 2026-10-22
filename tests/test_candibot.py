@@ -590,3 +590,155 @@ def testEmptyAnswersLeaveQuestionsUnanswered():
     assert answer("Salaire souhaité *", pay, empty) is None
     assert answer("Prétentions salariales *", None, empty) is None
     assert answer("Votre disponibilité *", None, empty) is None
+
+
+def testStoreAddsNewColumnsToAnOldDatabase(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "db.sqlite"
+    old = sqlite3.connect(path)  # schéma d'avant les colonnes query et outcome
+    old.execute(
+        "CREATE TABLE offers (id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL,"
+        " company TEXT NOT NULL, location TEXT NOT NULL, description TEXT NOT NULL,"
+        " on_site INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'new', score INTEGER, reason TEXT,"
+        " letter TEXT, detail TEXT, seen_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    )
+    old.execute("INSERT INTO offers VALUES ('9','u','t','c','l','d',1,'applied',8,'','','','x','x')")
+    old.commit()
+    old.close()
+    store = Store(path)
+    assert store.offers()[0]["query"] is None and store.offers()[0]["outcome"] is None
+    store.add(hellowork.parseOffer("1", offerPage()), "community manager")
+    assert [r["query"] for r in store.offers() if r["id"] == "1"] == ["community manager"]
+    store.close()
+
+
+def testExternalOffersAreScoredButStayManual(tmp_path):
+    store = Store(tmp_path / "db.sqlite")
+    for day, offerId in enumerate(("1", "2", "3"), 1):
+        store.add(hellowork.parseOffer(offerId, offerPage(external=True)))
+        store.db.execute(
+            "UPDATE offers SET seen_at = ? WHERE id = ?", (f"2026-10-0{day}T08:00:00+00:00", offerId)
+        )
+    assert [r["id"] for r in store.unscoredExternal()][:2] == ["3", "2"]  # les plus récentes d'abord
+    store.scored("1", 8, "bon profil", "Bonjour", minScore=7, passing="external")
+    store.scored("2", 3, "hors profil", "", minScore=7, passing="external")
+    assert store.counts() == {"external": 2, "rejected": 1}
+    assert [r["id"] for r in store.unscoredExternal()] == ["3"]
+    store.close()
+
+
+def testScoreSpendsLeftoverBudgetOnExternalOffers(tmp_path, monkeypatch):
+    from candibot import cli
+
+    store = Store(tmp_path / "db.sqlite")
+    store.add(hellowork.parseOffer("1", offerPage()))
+    for offerId in ("2", "3"):  # deux offres externes distinctes
+        offer = hellowork.parseOffer(offerId, offerPage(external=True))
+        store.add(dataclasses.replace(offer, title=f"Poste {offerId} H/F"))
+    monkeypatch.setattr(cli.shutil, "which", lambda tool: f"/usr/bin/{tool}")
+    monkeypatch.setattr(cli.llm, "evaluate", lambda *a, **k: llm.Evaluation(9, "bon profil", "Bonjour"))
+    cfg = type("Cfg", (), {})()
+    cfg.search = Search([], "", ("CDI",), 1, 7, 2, 10, (0, 0), ())  # max_scored = 2
+    cfg.candidate = cfg.models = None
+    cli.score(cfg, store)
+    assert store.counts() == {"drafted": 1, "external": 2}
+    assert len(store.unscoredExternal()) == 1  # 1 offre notée + 1 externe = budget de 2
+    # Un doublon écarté sans appel au modèle laisse son budget aux offres externes.
+    store.add(hellowork.parseOffer("4", offerPage()))
+    cli.score(cfg, store)
+    assert store.counts() == {"drafted": 1, "external": 2, "rejected": 1}
+    assert store.unscoredExternal() == []
+    store.close()
+
+
+def testExternalCopiesAreScoredOnce(tmp_path, monkeypatch):
+    from candibot import cli
+
+    store = Store(tmp_path / "db.sqlite")
+    for offerId in ("1", "2"):  # la même annonce externe sous deux identifiants
+        store.add(hellowork.parseOffer(offerId, offerPage(external=True)))
+    calls = []
+    monkeypatch.setattr(cli.shutil, "which", lambda tool: f"/usr/bin/{tool}")
+    monkeypatch.setattr(
+        cli.llm, "evaluate", lambda *a, **k: calls.append(1) or llm.Evaluation(9, "bon profil", "Bonjour")
+    )
+    cfg = type("Cfg", (), {})()
+    cfg.search = Search([], "", ("CDI",), 1, 7, 1, 10, (0, 0), ())  # une seule notation permise
+    cfg.candidate = cfg.models = None
+    cli.score(cfg, store)
+    assert len(calls) == 1  # la copie écartée n'a pas pris la seule place
+    assert store.counts() == {"external": 1, "rejected": 1}
+    store.close()
+
+
+def testOutcomeAndFollowUps(tmp_path):
+    from datetime import timedelta
+
+    from candibot.store import FOLLOW_UP_DAYS
+
+    store = Store(tmp_path / "db.sqlite")
+    for offerId in ("1", "2", "3"):
+        store.add(hellowork.parseOffer(offerId, offerPage()))
+        store.setStatus(offerId, "applied")
+    later = datetime.now(UTC) + timedelta(days=FOLLOW_UP_DAYS)
+    assert store.followUps(datetime.now(UTC)) == []
+    assert store.setOutcome("1", "entretien")
+    assert not store.setOutcome("404", "refus")
+    store.add(hellowork.parseOffer("4", offerPage()))
+    assert not store.setOutcome("4", "refus")  # pas envoyée
+    with pytest.raises(ValueError):
+        store.setOutcome("2", "peut-être")
+    assert [r["id"] for r in store.followUps(later)] == ["2", "3"]
+    body = mailer.render([], sent=True, followUps=store.followUps(later))
+    assert "À relancer" in body and "id 2" in body and "candibot outcome" in body
+    page = dashboard.render(store.offers(), [], later)
+    assert "Entretien" in page and "<b>1</b><span>entretiens ou acceptations" in page
+    store.close()
+
+
+def testRecapShowsLetterForManualOffers(tmp_path):
+    store = Store(tmp_path / "db.sqlite")
+    store.add(hellowork.parseOffer("1", offerPage(external=True)))
+    store.scored("1", 8, "bon profil", "Bonjour,\nMaxime", minScore=7, passing="external")
+    body = mailer.render(store.since("2000-01-01"), sent=False)
+    assert "À faire à la main" in body and "[8/10]" in body and "    Bonjour," in body
+    page = dashboard.render(store.offers(), [], datetime.now(UTC))
+    assert '<summary>Lettre</summary><p class="letter">Bonjour,\nMaxime</p>' in page
+    store.close()
+
+
+def testDashboardGroupsOffersByQuery(tmp_path):
+    store = Store(tmp_path / "db.sqlite")
+    store.add(hellowork.parseOffer("1", offerPage()), "community manager")
+    store.scored("1", 8, "bon profil", "Bonjour", minScore=7)
+    store.setStatus("1", "applied")
+    store.add(hellowork.parseOffer("2", offerPage()), "community manager")
+    store.scored("2", 3, "hors profil", "", minScore=7)
+    store.add(hellowork.parseOffer("3", offerPage()))
+    page = dashboard.render(store.offers(), [], datetime.now(UTC))
+    assert (
+        '<td>community manager</td><td class="num">2</td><td class="num">5,5</td><td class="num">1</td>'
+        in page
+    )
+    assert dashboard.NO_QUERY in page
+    store.close()
+
+
+def testDuplicatesDoNotUseTheBudgetOfNewOffers(tmp_path, monkeypatch):
+    from candibot import cli
+
+    store = Store(tmp_path / "db.sqlite")
+    store.add(hellowork.parseOffer("1", offerPage()))
+    store.setStatus("1", "applied")
+    store.add(hellowork.parseOffer("2", offerPage()))  # copie de l'offre 1, vue en premier
+    store.db.execute("UPDATE offers SET seen_at = '2026-01-01T00:00:00+00:00' WHERE id = '2'")
+    store.add(dataclasses.replace(hellowork.parseOffer("3", offerPage()), title="Autre poste H/F"))
+    monkeypatch.setattr(cli.shutil, "which", lambda tool: f"/usr/bin/{tool}")
+    monkeypatch.setattr(cli.llm, "evaluate", lambda *a, **k: llm.Evaluation(9, "bon profil", "Bonjour"))
+    cfg = type("Cfg", (), {})()
+    cfg.search = Search([], "", ("CDI",), 1, 7, 1, 10, (0, 0), ())  # une seule notation permise
+    cfg.candidate = cfg.models = None
+    cli.score(cfg, store)
+    assert store.counts() == {"applied": 1, "rejected": 1, "drafted": 1}
+    store.close()
