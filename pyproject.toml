@@ -1,7 +1,7 @@
 [project]
 name = "candibot"
 version = "0.1.0"
-description = "Bot de candidature en alternance sur HelloWork"
+description = "Bot de candidature HelloWork : CDI, CDD, intérim, stage, alternance…"
 authors = [
     { name = "Gaya KACI", email = "163902005+kacigaya@users.noreply.github.com" }
 ]
