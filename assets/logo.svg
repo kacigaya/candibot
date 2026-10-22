@@ -1,0 +1,14 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">candibot logo</title>
+  <desc id="desc">A CV page with a robot face and antenna, and a green check mark badge.</desc>
+  <path d="M128 52V30" stroke="#101820" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="128" cy="22" r="12" fill="#2EE59D" stroke="#101820" stroke-width="8"/>
+  <path d="M66 52H166L200 86V222A14 14 0 0 1 186 236H66A14 14 0 0 1 52 222V66A14 14 0 0 1 66 52Z" fill="#F7F7F2" stroke="#101820" stroke-width="10" stroke-linejoin="round"/>
+  <path d="M166 52V76A10 10 0 0 0 176 86H200" stroke="#101820" stroke-width="10" stroke-linejoin="round"/>
+  <circle cx="102" cy="114" r="13" fill="#101820"/>
+  <circle cx="150" cy="114" r="13" fill="#101820"/>
+  <path d="M106 146Q126 160 146 146" stroke="#101820" stroke-width="9" stroke-linecap="round"/>
+  <path d="M80 184H150M80 208H128" stroke="#101820" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="194" cy="200" r="34" fill="#2EE59D" stroke="#101820" stroke-width="10"/>
+  <path d="M178 200L190 212L211 189" stroke="#101820" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
