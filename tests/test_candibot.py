@@ -409,3 +409,19 @@ def testEditTextUsesEditorFromEnvironment(monkeypatch):
     monkeypatch.setattr(cli.subprocess, "run", fakeRun)
     assert cli.editText("Bonjour") == "Bonjour modifié"
     assert calls == ["vim"]
+
+
+def testRetryRequeuesOnlyFailedOrUnconfirmedOffers(tmp_path):
+    store = Store(tmp_path / "db.sqlite")
+    for offerId in ("1", "2", "3"):
+        store.add(hellowork.parseOffer(offerId, offerPage()))
+    store.scored("1", 9, "ok", "Lettre", minScore=7)
+    store.setStatus("1", "needs_review", "étape 2 : champs obligatoires vides")
+    store.setStatus("2", "failed", "timeout")  # jamais notée : pas de lettre
+    store.scored("3", 9, "ok", "Lettre", minScore=7)
+    store.setStatus("3", "applied", "vérifiée")
+    assert store.retry("1") == "drafted"
+    assert store.retry("2") == "new"
+    assert store.retry("3") is None and store.retry("404") is None
+    assert store.counts() == {"drafted": 1, "new": 1, "applied": 1}
+    store.close()

@@ -15,6 +15,7 @@ from candibot.hellowork import Offer
 #   drafted -> needs_review    étape imprévue ou erreur après un clic d'envoi : capture à vérifier
 #   drafted -> needs_review    posé avant chaque envoi : un arrêt brutal ne cause pas de doublon
 #   drafted -> failed          erreur technique avant tout clic d'envoi : rien n'est parti
+#   failed, needs_review -> drafted (ou new sans lettre)   `candibot retry`
 EXCLUDED_REASON = "organisme de formation exclu (config)"
 STATUSES = ("new", "rejected", "external", "drafted", "applied", "needs_review", "failed")
 
@@ -116,6 +117,19 @@ class Store:
                 "UPDATE offers SET status = ?, detail = ?, updated_at = ? WHERE id = ?",
                 (status, detail, _now(), offerId),
             )
+
+    def retry(self, offerId: str) -> str | None:
+        """Remet une offre `failed` ou `needs_review` dans la file d'envoi.
+
+        Renvoie le nouveau statut (`drafted`, ou `new` sans lettre), ou None si
+        l'offre n'existe pas ou n'a pas un statut relançable.
+        """
+        row = self.db.execute("SELECT status, letter FROM offers WHERE id = ?", (offerId,)).fetchone()
+        if row is None or row["status"] not in ("failed", "needs_review"):
+            return None
+        status = "drafted" if row["letter"] else "new"
+        self.setStatus(offerId, status, "relancée à la main")
+        return status
 
     def since(self, iso: str) -> list[sqlite3.Row]:
         """Offres modifiées depuis `iso`, pour le récapitulatif d'un passage."""

@@ -5,6 +5,7 @@ candibot run --send     envoie aussi les candidatures prêtes
 candibot status         compte les offres par statut
 candibot check          vérifie les sélecteurs HelloWork, sans rien envoyer
 candibot review         relit les lettres prêtes : garder, modifier ou refuser
+candibot retry ID…      remet des offres failed ou needs_review dans la file d'envoi
 """
 
 import argparse
@@ -313,6 +314,14 @@ def review(store: Store, ask=input, edit=editText) -> None:
                 return
 
 
+def retry(store: Store, ids: list[str]) -> None:
+    for offerId in ids:
+        status = store.retry(offerId)
+        print(f"{offerId} : {status}" if status else f"{offerId} : introuvable, ou ni failed ni needs_review")
+    # « Mes candidatures » est relu avant chaque envoi : une offre déjà partie n'est pas renvoyée.
+    print("Vérifiez votre espace HelloWork avant `run --send` pour les offres needs_review.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="candibot", description=__doc__.splitlines()[0])
     parser.add_argument("--config", type=Path, default=Path("config.toml"))
@@ -328,14 +337,18 @@ def main() -> None:
     sub.add_parser("status", help="nombre d'offres par statut")
     sub.add_parser("check", help="vérifier les sélecteurs HelloWork, sans rien envoyer")
     sub.add_parser("review", help="relire les lettres prêtes : garder, modifier ou refuser")
+    retryP = sub.add_parser("retry", help="remettre des offres failed ou needs_review dans la file d'envoi")
+    retryP.add_argument("ids", nargs="+", metavar="ID", help="identifiant HelloWork de l'offre")
     args = parser.parse_args()
 
     cfg = load(args.config)
-    if args.command in ("status", "review"):
+    if args.command in ("status", "review", "retry"):
         store = Store(cfg.dataDir / "candibot.db")
         try:
             if args.command == "review":
                 review(store)
+            elif args.command == "retry":
+                retry(store, args.ids)
             else:
                 for status, count in sorted(store.counts().items()):
                     print(f"{status:13} {count}")

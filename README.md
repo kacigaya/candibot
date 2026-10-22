@@ -78,6 +78,7 @@ uv run candibot run
 | `run --send --wait-code` | Idem, et attend le code HelloWork dans `data/otp.txt` pendant 15 minutes au plus |
 | `status` | Nombre d'offres par statut |
 | `review` | Relit les lettres prêtes une par une : garder, modifier dans `$EDITOR` (nano par défaut) ou refuser |
+| `retry ID…` | Remet des offres `failed` ou `needs_review` dans la file d'envoi (`drafted`, ou `new` sans lettre) |
 | `check` | Vérifie les sélecteurs HelloWork : lit une recherche et une fiche, ouvre le formulaire sans le soumettre. Code de sortie 1 en cas de problème. |
 
 ### Première candidature
@@ -137,8 +138,8 @@ Certaines offres posent des questions après l'identité et le CV. La section `[
 | `external` | Candidature uniquement sur le site du recruteur |
 | `drafted` | Lettre prête, en attente de `--send` |
 | `applied` | Candidature confirmée dans « Mes candidatures » |
-| `needs_review` | Envoi non confirmé. Vérifiez `data/shots/<id>.png` et votre espace HelloWork avant de repostuler. |
-| `failed` | Erreur technique avant tout envoi : rien n'est parti |
+| `needs_review` | Envoi non confirmé. Vérifiez `data/shots/<id>.png` et votre espace HelloWork, puis relancez avec `candibot retry <id>`. |
+| `failed` | Erreur technique avant tout envoi : rien n'est parti. `candibot retry <id>` la remet dans la file. |
 
 ## Passage quotidien
 
