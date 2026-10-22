@@ -1,0 +1,31 @@
+[project]
+name = "candibot"
+version = "0.1.0"
+description = "Bot de candidature en alternance sur HelloWork"
+authors = [
+    { name = "Gaya KACI", email = "163902005+kacigaya@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "webskrap>=2.6.0",
+]
+
+[project.scripts]
+candibot = "candibot.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.9",
+]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "BLE"]
+ignore = ["E501"]  # le formateur gère la longueur ; les prompts restent en prose

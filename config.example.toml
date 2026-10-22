@@ -1,0 +1,53 @@
+# Copier en config.toml (ignoré par Git) puis compléter.
+# Les chemins relatifs partent du dossier de ce fichier.
+
+[candidate]
+first_name = "Prénom"
+last_name = "NOM"
+email = "prenom.nom@example.com"
+cv_pdf = "data/cv.pdf"      # 2 Mo max (limite HelloWork)
+cv_text = "data/cv.md"      # version texte lue par Claude pour noter et rédiger
+# Précisions reprises dans les lettres. Laisser vide pour ne pas les mentionner.
+rhythm = ""                 # ex. "3 jours en entreprise, 2 jours à l'école"
+availability = ""           # ex. "dès maintenant"
+
+[search]
+queries = ["marketing communication", "marketing digital", "communication digitale"]
+location = "Île-de-France"
+pages = 2                   # 30 offres par page et par requête
+min_score = 7               # note sur 10 en dessous de laquelle l'offre est écartée
+max_scored = 40             # offres notées par Claude à chaque passage
+max_applications = 10       # candidatures envoyées par passage avec --send
+pause_seconds = [60, 180]   # pause aléatoire entre deux candidatures
+# Organismes de formation qui recrutent pour leur propre cursus : écartés sans
+# appel à Claude. Comparaison insensible à la casse, sur une partie du nom.
+exclude_companies = [
+    "ISCOD", "Digital School of Paris", "AURLOM", "Studi", "IFAE", "MyDigitalSchool",
+    "Institut F2I", "L'École Française", "École de l'Excellence Commerciale", "NEXA Digital School",
+    "Icademie", "IMC Alternance", "FUTURAE", "EFHT", "Consortio", "Jump", "CBS Paris",
+    "SUP'DE COM", "MBWAY", "IPAC BACHELOR", "IFFP", "Immersia", "SKILLIE", "EMCD",
+    "ISIFA", "ED'UP", "IEFT", "Mon-Campus", "Studency",
+    # Motifs génériques : tout nom d'école, de CFA ou de campus.
+    "School", "CFA", "École", "Ecole", "Campus",
+]
+
+[answers]
+# Réponses aux questions complémentaires des recruteurs (listes déroulantes et champs libres).
+civility = "Madame"
+availability = "immédiate"
+# Salaire brut mensuel visé. Sert à choisir la tranche de salaire proposée.
+# Le minimum légal en apprentissage dépend de l'âge et de l'année de formation
+# (service-public.gouv.fr). Exemple : 100 % du SMIC brut, 1 867,02 €/mois en 2026.
+salary_monthly = 1867.02
+salary_text = "100 % du SMIC"
+
+[llm]
+# Modèles gratuits d'OpenCode (liste : `opencode models opencode`), essayés dans l'ordre.
+models = ["opencode/big-pickle", "opencode/mimo-v2.6-flash-free"]
+
+[mail]
+# Emails via AgentMail : une confirmation par candidature envoyée ou à vérifier,
+# et le récapitulatif de chaque passage. Laisser vide pour
+# l'afficher dans le terminal seulement. Clé API : AGENTMAIL_API_KEY dans .env.
+inbox = ""                  # ex. candibot@agentmail.to
+to = ""

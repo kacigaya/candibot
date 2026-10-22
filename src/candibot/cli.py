@@ -1,0 +1,221 @@
+"""Bot de candidature en alternance sur HelloWork.
+
+candibot run            cherche, note et rédige, sans rien envoyer
+candibot run --send     envoie aussi les candidatures prêtes
+candibot status         compte les offres par statut
+"""
+
+import argparse
+import asyncio
+import hashlib
+import random
+import shutil
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+from webskrap import SessionConfig, WebSkrapClient, WebSkrapSession
+
+from candibot import hellowork, llm, mailer
+from candibot.config import Config, load
+from candibot.store import EXCLUDED_REASON, Store
+
+
+def log(message: str) -> None:
+    print(f"{datetime.now():%Y-%m-%d %H:%M:%S} {message}", flush=True)
+
+
+MAX_CONSECUTIVE_ERRORS = 5  # au-delà, HelloWork bloque ou est en panne : inutile d'insister
+
+
+async def collect(page, cfg: Config, store: Store) -> None:
+    """Enregistre les nouvelles offres. Une page en erreur n'est pas stockée et sera retentée au passage suivant."""
+    errors = 0
+    for query in cfg.search.queries:
+        try:
+            ids = await hellowork.search(page, query, cfg.search.location, cfg.search.pages)
+        except Exception as exc:  # noqa: BLE001
+            errors += 1
+            log(f"« {query} » : recherche impossible ({str(exc).splitlines()[0]})")
+            if errors >= MAX_CONSECUTIVE_ERRORS:
+                break
+            continue
+        errors = 0
+        fresh = [i for i in ids if not store.known(i)]
+        log(f"« {query} » : {len(ids)} offres, {len(fresh)} nouvelles")
+        for offer_id in fresh:
+            try:
+                offer = await hellowork.fetch_offer(page, offer_id)
+            except Exception as exc:  # noqa: BLE001
+                errors += 1
+                log(f"  {offer_id} : fiche inaccessible ({str(exc).splitlines()[0]})")
+                if errors >= MAX_CONSECUTIVE_ERRORS:
+                    log(f"{errors} erreurs d'affilée : collecte interrompue")
+                    return
+                continue
+            errors = 0
+            if offer is None:
+                log(f"  {offer_id} : fiche illisible (expirée ou balisage changé), ignorée")
+                continue
+            store.add(offer)
+            await asyncio.sleep(random.uniform(1, 3))
+
+
+def score(cfg: Config, store: Store) -> None:
+    for tool in ("opencode", "bwrap"):
+        if shutil.which(tool) is None:
+            raise SystemExit(f"`{tool}` introuvable dans le PATH (ajouter ~/.local/bin pour cron)")
+    # Les offres exclues ne coûtent pas d'appel à Claude : on les écarte avant la limite max_scored.
+    # Les lettres prêtes sont revérifiées aussi, pour qu'un nom ajouté à la liste prenne effet
+    # avant le prochain envoi.
+    for row in [*store.by_status("new"), *store.by_status("drafted")]:
+        if cfg.search.excluded(row["company"]):
+            store.scored(row["id"], 0, EXCLUDED_REASON, "", cfg.search.min_score)
+    rows = store.by_status("new", cfg.search.max_scored)
+    log(f"notation de {len(rows)} offres")
+    for row in rows:
+        try:
+            result = llm.evaluate(
+                cfg.candidate,
+                cfg.models,
+                title=row["title"],
+                company=row["company"],
+                location=row["location"],
+                description=row["description"],
+            )
+        except Exception as exc:  # noqa: BLE001 - l'offre reste "new" et sera retentée au prochain passage
+            log(f"  {row['id']} : notation impossible ({exc})")
+            continue
+        store.scored(row["id"], result.score, result.reason, result.letter, cfg.search.min_score)
+        log(f"  {result.score}/10 {row['title']} · {row['company']}")
+
+
+def code_waiter(path: Path, timeout_s: int = 900):
+    """Fournisseur de code HelloWork : attend que les 6 chiffres soient écrits dans `path`."""
+
+    async def wait() -> str | None:
+        path.unlink(missing_ok=True)  # jamais un vieux code d'une tentative précédente
+        log(f"HelloWork demande le code envoyé par email : écrire les 6 chiffres dans {path}")
+        for _ in range(timeout_s // 3):
+            if path.is_file():
+                code = path.read_text(encoding="utf-8").strip()
+                path.unlink()
+                log("code reçu, saisie")
+                return code
+            await asyncio.sleep(3)
+        log("aucun code reçu à temps")
+        return None
+
+    return wait
+
+
+async def send_applications(session: WebSkrapSession, page, cfg: Config, store: Store, otp=None) -> None:
+    rows = store.by_status("drafted", cfg.search.max_applications)
+    shots = cfg.data_dir / "shots"
+    shots.mkdir(parents=True, exist_ok=True)
+    c = cfg.candidate
+    for n, row in enumerate(rows):
+        if n:
+            await asyncio.sleep(random.uniform(*cfg.search.pause_seconds))
+        # Marqué avant l'envoi : si le processus meurt en cours de route, l'offre
+        # n'est pas renvoyée au passage suivant (pas de candidature en double).
+        store.set_status(row["id"], "needs_review", "envoi interrompu avant confirmation")
+        try:
+            result = await hellowork.apply(
+                session,
+                page,
+                row["url"],
+                title=row["title"],
+                company=row["company"],
+                first_name=c.first_name,
+                last_name=c.last_name,
+                email=c.email,
+                cv_pdf=c.cv_pdf,
+                letter=row["letter"],
+                screenshot=shots / f"{row['id']}.png",
+                answers=cfg.answers,
+                otp=otp,
+            )
+            store.set_status(row["id"], result.status, result.detail)
+            log(f"  {result.status} : {row['title']} · {row['company']} ({result.detail})")
+        except Exception as exc:  # noqa: BLE001 - une offre cassée ne doit pas arrêter les suivantes
+            store.set_status(row["id"], "failed", str(exc).splitlines()[0][:300])
+            log(f"  échec : {row['title']} · {row['company']} ({exc})")
+            continue  # "failed" : rien n'est parti, pas de confirmation
+        if result.status in ("applied", "needs_review"):  # sinon rien n'est parti
+            notify(cfg, row, result.status, result.detail)
+
+
+def notify(cfg: Config, row, status: str, detail: str) -> None:
+    """Confirmation par email à la candidate. Un échec d'email n'annule pas la candidature."""
+    if not cfg.mail.enabled:
+        return
+    subject, body = mailer.confirmation(row, status, detail)
+    try:
+        # Clé dérivée du contenu : un nouvel essai du même email n'envoie rien de plus, et un
+        # email différent pour la même offre (nouveau statut, nouveau détail) part normalement.
+        digest = hashlib.sha256(f"{subject}\n{body}".encode()).hexdigest()[:16]
+        mailer.send(cfg.mail, subject, body, f"confirm-{row['id']}-{digest}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"  confirmation email impossible ({exc})")
+
+
+async def run(cfg: Config, send: bool, wait_code: bool = False) -> None:
+    started = datetime.now(UTC).isoformat(timespec="seconds")
+    store = Store(cfg.data_dir / "candibot.db")
+    browser = SessionConfig(
+        driver="patchright",
+        channel="chromium",  # le canal "chrome" n'existe pas sur Linux ARM64
+        headless=True,
+        # Profil persistant : cookies et compte HelloWork conservés d'un passage à l'autre.
+        user_data_dir=cfg.data_dir / "browser",
+    )
+    try:
+        async with WebSkrapClient(default_config=browser) as client:
+            session = await client.session("hellowork")
+            page = session.context.pages[0] if session.context.pages else await session.context.new_page()
+            await page.goto(hellowork.BASE + "/fr-fr/", wait_until="domcontentloaded")
+            await hellowork.dismiss_cookies(page)
+            await collect(page, cfg, store)
+            score(cfg, store)
+            if send:
+                otp = code_waiter(cfg.data_dir / "otp.txt") if wait_code else None
+                await send_applications(session, page, cfg, store, otp)
+
+        body = mailer.render(store.since(started), send)
+        print(body)
+        if cfg.mail.enabled:
+            applied = sum(1 for r in store.since(started) if r["status"] == "applied")
+            # Clé dérivée du début du passage : un nouvel essai du même passage n'envoie rien de plus.
+            key = "recap-" + started.replace(":", "").replace("+", "")
+            mailer.send(cfg.mail, f"Alternance : {applied} candidature(s) envoyée(s)", body, key)
+            log(f"récapitulatif envoyé à {cfg.mail.to}")
+    finally:
+        store.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="candibot", description=__doc__.splitlines()[0])
+    parser.add_argument("--config", type=Path, default=Path("config.toml"))
+    sub = parser.add_subparsers(dest="command", required=True)
+    run_p = sub.add_parser("run", help="chercher, noter, rédiger (et envoyer avec --send)")
+    run_p.add_argument("--send", action="store_true", help="envoyer réellement les candidatures prêtes")
+    run_p.add_argument(
+        "--wait-code",
+        action="store_true",
+        help="si HelloWork demande le code reçu par email, l'attendre dans data/otp.txt (15 min)",
+    )
+    sub.add_parser("status", help="nombre d'offres par statut")
+    args = parser.parse_args()
+
+    cfg = load(args.config)
+    if args.command == "status":
+        store = Store(cfg.data_dir / "candibot.db")
+        for status, count in sorted(store.counts().items()):
+            print(f"{status:13} {count}")
+        store.close()
+        return
+    try:
+        asyncio.run(run(cfg, args.send, args.wait_code))
+    except KeyboardInterrupt:
+        sys.exit(130)

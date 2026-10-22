@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Caches des outils
+.pytest_cache/
+.ruff_cache/
+
+# Données personnelles, profil navigateur, base et secrets
+data/
+config.toml
+.env
+.env.*
+*.log
+webskrap-output/
+
+# Éditeurs et système
+.idea/
+.vscode/
+.DS_Store
