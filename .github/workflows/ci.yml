@@ -23,5 +23,8 @@ jobs:
         run: uv run ruff check .
       - name: Format
         run: uv run ruff format --check .
+      # tests/test_apply_browser.py drives a real Chromium against simulated pages.
+      - name: Install Chromium
+        run: uv run patchright install --with-deps chromium
       - name: Test
         run: uv run pytest -q

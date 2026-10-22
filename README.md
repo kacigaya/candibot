@@ -189,6 +189,8 @@ Le passage quotidien n'attend pas de code HelloWork. Si la session expire, les o
 
 ## Développement
 
+`tests/test_apply_browser.py` parcourt le formulaire de candidature dans Chromium, contre des pages HelloWork simulées, sans réseau. Il faut le Chromium de Patchright.
+
 La CI (`.github/workflows/ci.yml`) lance ces trois vérifications à chaque push sur `main` et sur chaque pull request.
 
 ```bash
