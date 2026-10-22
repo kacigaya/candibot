@@ -65,22 +65,28 @@ def answer(label: str, options: list[tuple[str, str]] | None, answers: Answers) 
     """Valeur à saisir pour la question `label`, `SCHOOL` pour une annonce d'école, ou None si inconnue.
 
     `options` vaut None pour un champ texte, sinon la liste (valeur, texte) d'une liste déroulante.
+    Une réponse vide dans la config donne None : la question reste vide et l'offre
+    passe en `needs_review`, plutôt que de recevoir une réponse au hasard.
     """
     if _SCHOOL.search(label):
         return SCHOOL
     if options is None:
         if _SALARY.search(label):
-            return answers.salaryText
+            return answers.salaryText or None
         if _AVAILABILITY.search(label):
-            return f"Disponible {answers.availability}"
+            return f"Disponible {answers.availability}" if answers.availability else None
         return None
     choices = [(value, _norm(text)) for value, text in options if value]
     if _CIVILITY.search(label):
         wanted = _norm(answers.civility)
+        if not wanted:
+            return None
         return next((value for value, text in choices if text == wanted), None)
     if _AVAILABILITY.search(label):
         wanted = _norm(answers.availability)
+        if not wanted:
+            return None  # sinon toute option commencerait par ""
         return next((value for value, text in choices if text.startswith(wanted)), None)
     if _SALARY.search(label):
-        return _salaryOption(options, answers.salaryMonthly)
+        return _salaryOption(options, answers.salaryMonthly) if answers.salaryMonthly > 0 else None
     return None

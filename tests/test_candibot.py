@@ -425,3 +425,17 @@ def testRetryRequeuesOnlyFailedOrUnconfirmedOffers(tmp_path):
     assert store.retry("3") is None and store.retry("404") is None
     assert store.counts() == {"drafted": 1, "new": 1, "applied": 1}
     store.close()
+
+
+def testEmptyAnswersLeaveQuestionsUnanswered():
+    from candibot.questions import Answers, answer
+
+    empty = Answers("", "", 0, "")
+    civ = [("", "Choisir"), ("1", "Madame"), ("2", "Monsieur")]
+    when = [("", "Choisir"), ("a", "Immédiate"), ("b", "Dans 1 mois")]
+    pay = [("", "Choisir"), ("a", "Moins de 1 500 €"), ("b", "1 500 € - 2 000 €")]
+    assert answer("Civilité *", civ, empty) is None
+    assert answer("Disponibilité *", when, empty) is None
+    assert answer("Salaire souhaité *", pay, empty) is None
+    assert answer("Prétentions salariales *", None, empty) is None
+    assert answer("Votre disponibilité *", None, empty) is None
