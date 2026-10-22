@@ -189,6 +189,8 @@ Le passage quotidien n'attend pas de code HelloWork. Si la session expire, les o
 
 ## Développement
 
+La CI (`.github/workflows/ci.yml`) lance ces trois vérifications à chaque push sur `main` et sur chaque pull request.
+
 ```bash
 uv run pytest -q
 uv run ruff check .
