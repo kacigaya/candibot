@@ -25,3 +25,6 @@ webskrap-output/
 .idea/
 .vscode/
 .DS_Store
+
+# Notes locales pour les agents
+AGENTS.md
