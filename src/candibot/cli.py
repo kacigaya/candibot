@@ -7,6 +7,7 @@ candibot check          vérifie les sélecteurs HelloWork, sans rien envoyer
 candibot review         relit les lettres prêtes : garder, modifier ou refuser
 candibot retry ID…      remet des offres failed ou needs_review dans la file d'envoi
 candibot dashboard      écrit le tableau de bord HTML dans data/dashboard.html
+candibot outcome ID R   note la réponse du recruteur (relancee, entretien, refus, acceptee)
 """
 
 import argparse
@@ -25,7 +26,7 @@ from webskrap import SessionConfig, WebSkrapClient, WebSkrapSession
 
 from candibot import application, dashboard, hellowork, llm, mailer
 from candibot.config import Config, load
-from candibot.store import EXCLUDED_REASON, Store
+from candibot.store import EXCLUDED_REASON, OUTCOMES, Store
 
 
 def log(message: str) -> None:
@@ -70,7 +71,7 @@ async def collect(page, cfg: Config, store: Store) -> int:
             if offer is None:
                 log(f"  {offerId} : fiche illisible (expirée ou balisage changé), ignorée")
                 continue
-            store.add(offer)
+            store.add(offer, query)
             await asyncio.sleep(random.uniform(1, 3))
     return found
 
@@ -82,32 +83,56 @@ def score(cfg: Config, store: Store) -> None:
     # Les offres exclues ne coûtent pas d'appel au modèle : on les écarte avant la limite max_scored.
     # Les lettres prêtes sont revérifiées aussi, pour qu'un nom ajouté à la liste prenne effet
     # avant le prochain envoi.
-    for row in [*store.byStatus("new"), *store.byStatus("drafted")]:
+    for row in [*store.byStatus("new"), *store.byStatus("drafted"), *store.byStatus("external")]:
         if cfg.search.excluded(row["company"]):
             store.scored(row["id"], 0, EXCLUDED_REASON, "", cfg.search.minScore)
-    rows = store.byStatus("new", cfg.search.maxScored)
-    log(f"notation de {len(rows)} offres")
-    for row in rows:
+    # Pas de limite à la lecture : les doublons écartés sans appel au modèle ne consomment
+    # pas le budget `max_scored`, qui compte les appels réels.
+    calls = 0
+    for row in store.byStatus("new"):
+        if calls >= cfg.search.maxScored:
+            break
         duplicate = store.duplicateOf(row["id"], ("drafted", "applied", "needs_review"))
         if duplicate:
             store.setStatus(row["id"], "rejected", f"doublon de l'offre {duplicate}")
             log(f"  doublon de {duplicate} : {row['title']} · {row['company']}")
             continue
-        try:
-            result = llm.evaluate(
-                cfg.candidate,
-                cfg.search,
-                cfg.models,
-                title=row["title"],
-                company=row["company"],
-                location=row["location"],
-                description=row["description"],
-            )
-        except Exception as exc:  # noqa: BLE001 - l'offre reste "new" et sera retentée au prochain passage
-            log(f"  {row['id']} : notation impossible ({exc})")
+        evaluate(cfg, store, row, "drafted")
+        calls += 1
+    # Les offres à faire à la main sont notées aussi, avec le budget restant : la note dit
+    # lesquelles faire d'abord, et la lettre sert à postuler sur le site du recruteur.
+    # Pas de limite à la lecture : les copies écartées ne doivent pas occuper le budget.
+    for row in store.unscoredExternal():
+        if calls >= cfg.search.maxScored:
+            break
+        # La première copie gardée reste `external` : les suivantes la trouvent et sont écartées.
+        duplicate = store.duplicateOf(row["id"], ("external", "drafted", "applied", "needs_review"))
+        if duplicate:
+            store.setStatus(row["id"], "rejected", f"doublon de l'offre {duplicate}")
+            log(f"  doublon de {duplicate} : {row['title']} · {row['company']}")
             continue
-        store.scored(row["id"], result.score, result.reason, result.letter, cfg.search.minScore)
-        log(f"  {result.score}/10 {row['title']} · {row['company']}")
+        evaluate(cfg, store, row, "external")
+        calls += 1
+    log(f"{calls} offre(s) notée(s) (max_scored = {cfg.search.maxScored})")
+
+
+def evaluate(cfg: Config, store: Store, row, passing: str) -> None:
+    """Note une offre et rédige sa lettre. Au-dessus de min_score, elle passe en `passing`."""
+    try:
+        result = llm.evaluate(
+            cfg.candidate,
+            cfg.search,
+            cfg.models,
+            title=row["title"],
+            company=row["company"],
+            location=row["location"],
+            description=row["description"],
+        )
+    except Exception as exc:  # noqa: BLE001 - l'offre garde son statut et sera retentée au prochain passage
+        log(f"  {row['id']} : notation impossible ({exc})")
+        return
+    store.scored(row["id"], result.score, result.reason, result.letter, cfg.search.minScore, passing)
+    log(f"  {result.score}/10 {row['title']} · {row['company']}")
 
 
 def codeWaiter(path: Path, timeoutS: int = 900):
@@ -274,7 +299,7 @@ async def run(cfg: Config, send: bool, waitCode: bool = False) -> None:
                 otp = codeWaiter(cfg.dataDir / "otp.txt") if waitCode else None
                 await sendApplications(session, page, cfg, store, otp)
 
-        body = mailer.render(store.since(started), send)
+        body = mailer.render(store.since(started), send, store.followUps(datetime.now(UTC)))
         print(body)
         if cfg.mail.enabled:
             applied = sum(1 for r in store.since(started) if r["status"] == "applied")
@@ -285,6 +310,10 @@ async def run(cfg: Config, send: bool, waitCode: bool = False) -> None:
         problem = runProblem(found, store.since(started), send)
     finally:
         alert(cfg, store, started, problem)
+        try:
+            writeDashboard(store, cfg.dataDir / "dashboard.html")
+        except Exception as exc:  # noqa: BLE001 - le tableau de bord ne doit pas masquer l'issue du passage
+            log(f"tableau de bord impossible ({exc})")
         store.close()
 
 
@@ -339,6 +368,13 @@ def retry(store: Store, ids: list[str]) -> None:
     print("Vérifiez votre espace HelloWork avant `run --send` pour les offres needs_review.")
 
 
+def outcome(store: Store, offerId: str, value: str) -> None:
+    if store.setOutcome(offerId, value):
+        print(f"{offerId} : {value}")
+    else:
+        print(f"{offerId} : introuvable, ou candidature pas envoyée (statut autre que applied)")
+
+
 def lastRunLine(started: str | None, now: datetime) -> str:
     """Date du dernier passage, avec un avertissement s'il est trop ancien (dashboard.STALE_DAYS)."""
     if started is None:
@@ -377,18 +413,23 @@ def main() -> None:
     sub.add_parser("review", help="relire les lettres prêtes : garder, modifier ou refuser")
     retryP = sub.add_parser("retry", help="remettre des offres failed ou needs_review dans la file d'envoi")
     retryP.add_argument("ids", nargs="+", metavar="ID", help="identifiant HelloWork de l'offre")
+    outcomeP = sub.add_parser("outcome", help="noter la réponse du recruteur à une candidature envoyée")
+    outcomeP.add_argument("id", metavar="ID", help="identifiant HelloWork de l'offre")
+    outcomeP.add_argument("value", choices=OUTCOMES, help="réponse du recruteur")
     dashP = sub.add_parser("dashboard", help="écrire le tableau de bord HTML des statistiques")
     dashP.add_argument("--out", type=Path, help="fichier de sortie (défaut : data/dashboard.html)")
     args = parser.parse_args()
 
     cfg = load(args.config)
-    if args.command in ("status", "review", "retry", "dashboard"):
+    if args.command in ("status", "review", "retry", "dashboard", "outcome"):
         store = Store(cfg.dataDir / "candibot.db")
         try:
             if args.command == "review":
                 review(store)
             elif args.command == "retry":
                 retry(store, args.ids)
+            elif args.command == "outcome":
+                outcome(store, args.id, args.value)
             elif args.command == "dashboard":
                 writeDashboard(store, args.out or cfg.dataDir / "dashboard.html")
             else:
