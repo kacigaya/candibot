@@ -20,6 +20,8 @@ cp config.example.toml config.toml   # puis compléter
 # déposer data/cv.pdf (2 Mo max) et data/cv.md (version texte du CV)
 ```
 
+Un agent de code (Claude Code ou autre) peut aussi faire cette configuration avec vous : le skill `.claude/skills/setup-candibot/SKILL.md` lui indique les questions à poser.
+
 Prérequis : `opencode` et `bwrap` (bubblewrap), et le Chromium de Patchright (`uv run patchright install chromium` s'il manque).
 
 ## Utilisation
