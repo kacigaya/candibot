@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS offers (
 )
 """
 
+# Issue de chaque passage, pour l'alerte après plusieurs échecs d'affilée.
+RUNS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS runs (
+    started TEXT PRIMARY KEY,
+    problem TEXT
+)
+"""
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -47,6 +55,7 @@ class Store:
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
         self.db.execute(SCHEMA)
+        self.db.execute(RUNS_SCHEMA)
 
     def close(self) -> None:
         self.db.close()
@@ -106,6 +115,22 @@ class Store:
         return self.db.execute(
             "SELECT * FROM offers WHERE updated_at >= ? ORDER BY status, score DESC", (iso,)
         ).fetchall()
+
+    def recordRun(self, started: str, problem: str | None) -> None:
+        """Enregistre l'issue d'un passage : `problem` vaut None s'il s'est bien passé."""
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO runs (started, problem) VALUES (?, ?)", (started, problem)
+            )
+
+    def failedStreak(self) -> int:
+        """Nombre de passages en échec depuis le dernier passage réussi."""
+        streak = 0
+        for (problem,) in self.db.execute("SELECT problem FROM runs ORDER BY started DESC"):
+            if problem is None:
+                break
+            streak += 1
+        return streak
 
     def counts(self) -> dict[str, int]:
         rows = self.db.execute("SELECT status, COUNT(*) FROM offers GROUP BY status").fetchall()

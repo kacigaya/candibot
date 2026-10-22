@@ -342,3 +342,34 @@ def testPromptStatesSearchAndContracts():
     search = Search(["data analyst"], "Lyon", ("CDI", "CDD"), 1, 7, 1, 1, (0, 0), ())
     prompt = llm.buildPrompt(candidate, search, "Titre", "ACME", "Lyon", "Description")
     assert "Métiers : data analyst\nZone : Lyon\nContrats : CDI, CDD" in prompt
+
+
+def testRunProblemFlagsEmptySearchAndUnconfirmedSends():
+    from candibot.cli import runProblem
+
+    assert runProblem(0, [], send=False) == "aucune offre trouvée dans les résultats de recherche"
+    assert runProblem(30, [{"status": "drafted"}], send=False) is None
+    failed = [{"status": "failed"}, {"status": "needs_review"}]
+    assert runProblem(30, failed, send=True) == "2 envoi(s) tenté(s), aucun confirmé"
+    assert runProblem(30, failed, send=False) is None  # rien n'est envoyé en simulation
+    assert runProblem(30, [*failed, {"status": "applied"}], send=True) is None
+
+
+def testAlertMailsOncePerFailedStreak(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from candibot import cli
+    from candibot.config import Mail
+
+    sent = []
+    monkeypatch.setattr(cli.mailer, "send", lambda mail, subject, body, key: sent.append((subject, key)))
+    cfg = SimpleNamespace(mail=Mail(inbox="bot@agentmail.to", to="moi@example.com"))
+    store = Store(tmp_path / "db.sqlite")
+    cli.alert(cfg, store, "2026-10-01T07:30:00+00:00", None)
+    for day in range(2, 7):
+        cli.alert(cfg, store, f"2026-10-0{day}T07:30:00+00:00", "aucune offre trouvée")
+    assert store.failedStreak() == 5
+    assert sent == [("candibot : 3 passages en échec", "alert-2026-10-04T07:30:00+00:00")]
+    cli.alert(cfg, store, "2026-10-07T07:30:00+00:00", None)
+    assert store.failedStreak() == 0
+    store.close()

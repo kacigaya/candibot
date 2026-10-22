@@ -29,9 +29,12 @@ def log(message: str) -> None:
 MAX_CONSECUTIVE_ERRORS = 5  # au-delà, HelloWork bloque ou est en panne : inutile d'insister
 
 
-async def collect(page, cfg: Config, store: Store) -> None:
-    """Enregistre les nouvelles offres. Une page en erreur n'est pas stockée et sera retentée au passage suivant."""
-    errors = 0
+async def collect(page, cfg: Config, store: Store) -> int:
+    """Enregistre les nouvelles offres. Une page en erreur n'est pas stockée et sera retentée au passage suivant.
+
+    Renvoie le nombre d'offres trouvées dans les résultats, nouvelles ou non.
+    """
+    errors = found = 0
     for query in cfg.search.queries:
         try:
             ids = await hellowork.search(
@@ -44,6 +47,7 @@ async def collect(page, cfg: Config, store: Store) -> None:
                 break
             continue
         errors = 0
+        found += len(ids)
         fresh = [i for i in ids if not store.known(i)]
         log(f"« {query} » : {len(ids)} offres, {len(fresh)} nouvelles")
         for offerId in fresh:
@@ -54,7 +58,7 @@ async def collect(page, cfg: Config, store: Store) -> None:
                 log(f"  {offerId} : fiche inaccessible ({str(exc).splitlines()[0]})")
                 if errors >= MAX_CONSECUTIVE_ERRORS:
                     log(f"{errors} erreurs d'affilée : collecte interrompue")
-                    return
+                    return found
                 continue
             errors = 0
             if offer is None:
@@ -62,6 +66,7 @@ async def collect(page, cfg: Config, store: Store) -> None:
                 continue
             store.add(offer)
             await asyncio.sleep(random.uniform(1, 3))
+    return found
 
 
 def score(cfg: Config, store: Store) -> None:
@@ -150,6 +155,45 @@ async def sendApplications(session: WebSkrapSession, page, cfg: Config, store: S
             notify(cfg, row, result.status, result.detail)
 
 
+ALERT_AFTER = 3  # passages en échec d'affilée avant l'email d'alerte
+
+
+def runProblem(found: int, rows: list, send: bool) -> str | None:
+    """Raison pour laquelle un passage a échoué, ou None s'il s'est bien passé.
+
+    Aucune offre trouvée signale une recherche cassée (site changé, IP bloquée).
+    Avec --send, des envois tentés sans aucun `applied` signalent un formulaire
+    cassé ou une session expirée.
+    """
+    if not found:
+        return "aucune offre trouvée dans les résultats de recherche"
+    attempted = [r for r in rows if r["status"] in ("applied", "needs_review", "failed")]
+    if send and attempted and not any(r["status"] == "applied" for r in attempted):
+        return f"{len(attempted)} envoi(s) tenté(s), aucun confirmé"
+    return None
+
+
+def alert(cfg: Config, store: Store, started: str, problem: str | None) -> None:
+    """Enregistre l'issue du passage et prévient par email au 3ᵉ échec d'affilée, une fois par série."""
+    store.recordRun(started, problem)
+    if not problem:
+        return
+    streak = store.failedStreak()
+    log(f"passage en échec ({problem}), {streak} d'affilée")
+    if streak != ALERT_AFTER or not cfg.mail.enabled:
+        return
+    body = (
+        f"Les {streak} derniers passages de candibot ont échoué.\n"
+        f"Dernière cause : {problem}\n\n"
+        "Lancez `uv run candibot check` pour vérifier les sélecteurs HelloWork, "
+        "et consultez data/logs/ et data/shots/."
+    )
+    try:
+        mailer.send(cfg.mail, f"candibot : {streak} passages en échec", body, f"alert-{started}")
+    except Exception as exc:  # noqa: BLE001 - l'alerte ne doit pas masquer l'erreur du passage
+        log(f"alerte email impossible ({exc})")
+
+
 def notify(cfg: Config, row, status: str, detail: str) -> None:
     """Confirmation par email à la candidate. Un échec d'email n'annule pas la candidature."""
     if not cfg.mail.enabled:
@@ -195,13 +239,14 @@ async def check(cfg: Config) -> bool:
 async def run(cfg: Config, send: bool, waitCode: bool = False) -> None:
     started = datetime.now(UTC).isoformat(timespec="seconds")
     store = Store(cfg.dataDir / "candibot.db")
+    problem: str | None = "passage interrompu par une erreur"
     try:
         async with WebSkrapClient(default_config=browserConfig(cfg)) as client:
             session = await client.session("hellowork")
             page = await openPage(session)
             await page.goto(hellowork.BASE + "/fr-fr/", wait_until="domcontentloaded")
             await hellowork.dismissCookies(page)
-            await collect(page, cfg, store)
+            found = await collect(page, cfg, store)
             score(cfg, store)
             if send:
                 otp = codeWaiter(cfg.dataDir / "otp.txt") if waitCode else None
@@ -215,7 +260,9 @@ async def run(cfg: Config, send: bool, waitCode: bool = False) -> None:
             key = "recap-" + started.replace(":", "").replace("+", "")
             mailer.send(cfg.mail, f"candibot : {applied} candidature(s) envoyée(s)", body, key)
             log(f"récapitulatif envoyé à {cfg.mail.to}")
+        problem = runProblem(found, store.since(started), send)
     finally:
+        alert(cfg, store, started, problem)
         store.close()
 
 

@@ -188,6 +188,8 @@ journalctl -u candibot.service -n 50      # dernier passage
 
 Le passage quotidien n'attend pas de code HelloWork. Si la session expire, les offres passent en `needs_review` et vous recevez un email. Relancez alors à la main avec `--wait-code` pour vous reconnecter.
 
+Un passage échoue s'il ne trouve aucune offre dans les résultats, ou si, avec `--send`, aucun des envois tentés n'est confirmé. Au 3ᵉ échec d'affilée, candibot envoie un email d'alerte (si `[mail]` est rempli), une seule fois par série. Lancez alors `uv run candibot check`.
+
 ## Développement
 
 `tests/test_apply_browser.py` parcourt le formulaire de candidature dans Chromium, contre des pages HelloWork simulées, sans réseau. Il faut le Chromium de Patchright.
