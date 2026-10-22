@@ -10,6 +10,7 @@ from candibot.hellowork import Offer
 #   new -> rejected            note trop basse
 #   new -> external            candidature seulement sur le site du recruteur
 #   new -> drafted             lettre prête, en attente d'envoi
+#   drafted -> rejected        lettre refusée avec `candibot review`
 #   drafted -> applied         candidature confirmée par HelloWork
 #   drafted -> needs_review    étape imprévue ou erreur après un clic d'envoi : capture à vérifier
 #   drafted -> needs_review    posé avant chaque envoi : un arrêt brutal ne cause pas de doublon
@@ -99,6 +100,12 @@ class Store:
             self.db.execute(
                 "UPDATE offers SET status = ?, score = ?, reason = ?, letter = ?, updated_at = ? WHERE id = ?",
                 (status, score, reason, letter, _now(), offerId),
+            )
+
+    def setLetter(self, offerId: str, letter: str) -> None:
+        with self.db:
+            self.db.execute(
+                "UPDATE offers SET letter = ?, updated_at = ? WHERE id = ?", (letter, _now(), offerId)
             )
 
     def setStatus(self, offerId: str, status: str, detail: str = "") -> None:

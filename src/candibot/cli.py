@@ -4,14 +4,18 @@ candibot run            cherche, note et rédige, sans rien envoyer
 candibot run --send     envoie aussi les candidatures prêtes
 candibot status         compte les offres par statut
 candibot check          vérifie les sélecteurs HelloWork, sans rien envoyer
+candibot review         relit les lettres prêtes : garder, modifier ou refuser
 """
 
 import argparse
 import asyncio
 import hashlib
+import os
 import random
 import shutil
+import subprocess
 import sys
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -266,6 +270,49 @@ async def run(cfg: Config, send: bool, waitCode: bool = False) -> None:
         store.close()
 
 
+REVIEW_REJECTED = "lettre refusée à la relecture"
+
+
+def editText(text: str) -> str:
+    """Ouvre `text` dans l'éditeur de $EDITOR (nano par défaut) et renvoie le texte enregistré."""
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as file:
+        file.write(text)
+    path = Path(file.name)
+    try:
+        subprocess.run([os.environ.get("EDITOR", "nano"), str(path)], check=True)
+        return path.read_text(encoding="utf-8").strip()
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def review(store: Store, ask=input, edit=editText) -> None:
+    """Relit les lettres prêtes une par une, avant `run --send`."""
+    rows = store.byStatus("drafted")
+    if not rows:
+        print("aucune lettre prête")
+        return
+    for n, row in enumerate(rows, 1):
+        print(f"\n[{n}/{len(rows)}] {row['score']}/10 {row['title']} · {row['company']} ({row['location']})")
+        print(f"{row['url']}\n{row['reason']}\n\n{row['letter']}\n")
+        while True:
+            choice = ask("[g]arder, [m]odifier, [r]efuser, [q]uitter ? ").strip().lower()[:1]
+            if choice == "m":
+                letter = edit(row["letter"])
+                if letter:
+                    store.setLetter(row["id"], letter)
+                    print("lettre modifiée")
+                    break
+                print("lettre vide : modification ignorée")
+            elif choice == "r":
+                store.setStatus(row["id"], "rejected", REVIEW_REJECTED)
+                print("offre écartée")
+                break
+            elif choice == "g":
+                break
+            elif choice == "q":
+                return
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="candibot", description=__doc__.splitlines()[0])
     parser.add_argument("--config", type=Path, default=Path("config.toml"))
@@ -280,14 +327,22 @@ def main() -> None:
     )
     sub.add_parser("status", help="nombre d'offres par statut")
     sub.add_parser("check", help="vérifier les sélecteurs HelloWork, sans rien envoyer")
+    sub.add_parser("review", help="relire les lettres prêtes : garder, modifier ou refuser")
     args = parser.parse_args()
 
     cfg = load(args.config)
-    if args.command == "status":
+    if args.command in ("status", "review"):
         store = Store(cfg.dataDir / "candibot.db")
-        for status, count in sorted(store.counts().items()):
-            print(f"{status:13} {count}")
-        store.close()
+        try:
+            if args.command == "review":
+                review(store)
+            else:
+                for status, count in sorted(store.counts().items()):
+                    print(f"{status:13} {count}")
+        except (KeyboardInterrupt, EOFError):
+            sys.exit(130)
+        finally:
+            store.close()
         return
     try:
         if args.command == "check":

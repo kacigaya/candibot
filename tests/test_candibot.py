@@ -373,3 +373,39 @@ def testAlertMailsOncePerFailedStreak(tmp_path, monkeypatch):
     cli.alert(cfg, store, "2026-10-07T07:30:00+00:00", None)
     assert store.failedStreak() == 0
     store.close()
+
+
+def testReviewKeepsEditsAndRejectsLetters(tmp_path, capsys):
+    from candibot import cli
+
+    store = Store(tmp_path / "db.sqlite")
+    for offerId, score in (("1", 10), ("2", 9), ("3", 8), ("4", 7)):  # relues par note décroissante
+        store.add(hellowork.parseOffer(offerId, offerPage()))
+        store.scored(offerId, score, "proche du CV", f"Lettre {offerId}", minScore=7)
+    # 1 : modifiée après un premier essai vide ; 2 : refusée ; 3 : gardée ; 4 : jamais vue (quitter).
+    answers = iter(["m", "m", "x", "r", "g", "q"])
+    edits = iter(["", "Lettre 1 corrigée"])
+    cli.review(store, ask=lambda _: next(answers), edit=lambda _: next(edits))
+    rows = {r["id"]: r for r in store.db.execute("SELECT * FROM offers")}
+    assert rows["1"]["status"] == "drafted" and rows["1"]["letter"] == "Lettre 1 corrigée"
+    assert rows["2"]["status"] == "rejected" and rows["2"]["detail"] == cli.REVIEW_REJECTED
+    assert rows["3"]["letter"] == "Lettre 3" and rows["4"]["status"] == "drafted"
+    assert "modification ignorée" in capsys.readouterr().out
+    store.close()
+
+
+def testEditTextUsesEditorFromEnvironment(monkeypatch):
+    from pathlib import Path
+
+    from candibot import cli
+
+    calls = []
+
+    def fakeRun(cmd, check):
+        calls.append(cmd[0])
+        Path(cmd[1]).write_text(Path(cmd[1]).read_text(encoding="utf-8") + " modifié\n", encoding="utf-8")
+
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr(cli.subprocess, "run", fakeRun)
+    assert cli.editText("Bonjour") == "Bonjour modifié"
+    assert calls == ["vim"]

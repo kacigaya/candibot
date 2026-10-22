@@ -77,6 +77,7 @@ uv run candibot run
 | `run --send` | Envoie aussi les candidatures prêtes |
 | `run --send --wait-code` | Idem, et attend le code HelloWork dans `data/otp.txt` pendant 15 minutes au plus |
 | `status` | Nombre d'offres par statut |
+| `review` | Relit les lettres prêtes une par une : garder, modifier dans `$EDITOR` (nano par défaut) ou refuser |
 | `check` | Vérifie les sélecteurs HelloWork : lit une recherche et une fiche, ouvre le formulaire sans le soumettre. Code de sortie 1 en cas de problème. |
 
 ### Première candidature
