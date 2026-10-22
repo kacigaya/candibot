@@ -153,6 +153,13 @@ class Store:
             streak += 1
         return streak
 
+    def offers(self) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM offers").fetchall()
+
+    def runs(self, limit: int) -> list[sqlite3.Row]:
+        """Derniers passages, du plus récent au plus ancien."""
+        return self.db.execute("SELECT * FROM runs ORDER BY started DESC LIMIT ?", (limit,)).fetchall()
+
     def counts(self) -> dict[str, int]:
         rows = self.db.execute("SELECT status, COUNT(*) FROM offers GROUP BY status").fetchall()
         return {r[0]: r[1] for r in rows}

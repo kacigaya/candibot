@@ -6,6 +6,7 @@ candibot status         compte les offres par statut
 candibot check          vérifie les sélecteurs HelloWork, sans rien envoyer
 candibot review         relit les lettres prêtes : garder, modifier ou refuser
 candibot retry ID…      remet des offres failed ou needs_review dans la file d'envoi
+candibot dashboard      écrit le tableau de bord HTML dans data/dashboard.html
 """
 
 import argparse
@@ -22,7 +23,7 @@ from pathlib import Path
 
 from webskrap import SessionConfig, WebSkrapClient, WebSkrapSession
 
-from candibot import application, hellowork, llm, mailer
+from candibot import application, dashboard, hellowork, llm, mailer
 from candibot.config import Config, load
 from candibot.store import EXCLUDED_REASON, Store
 
@@ -322,6 +323,16 @@ def retry(store: Store, ids: list[str]) -> None:
     print("Vérifiez votre espace HelloWork avant `run --send` pour les offres needs_review.")
 
 
+def writeDashboard(store: Store, path: Path) -> None:
+    html = dashboard.render(store.offers(), store.runs(10), datetime.now(UTC))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Écrit à côté puis remplace : une erreur en cours d'écriture laisse l'ancienne page intacte.
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(html, encoding="utf-8")
+    tmp.replace(path)
+    print(f"tableau de bord écrit dans {path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="candibot", description=__doc__.splitlines()[0])
     parser.add_argument("--config", type=Path, default=Path("config.toml"))
@@ -339,16 +350,20 @@ def main() -> None:
     sub.add_parser("review", help="relire les lettres prêtes : garder, modifier ou refuser")
     retryP = sub.add_parser("retry", help="remettre des offres failed ou needs_review dans la file d'envoi")
     retryP.add_argument("ids", nargs="+", metavar="ID", help="identifiant HelloWork de l'offre")
+    dashP = sub.add_parser("dashboard", help="écrire le tableau de bord HTML des statistiques")
+    dashP.add_argument("--out", type=Path, help="fichier de sortie (défaut : data/dashboard.html)")
     args = parser.parse_args()
 
     cfg = load(args.config)
-    if args.command in ("status", "review", "retry"):
+    if args.command in ("status", "review", "retry", "dashboard"):
         store = Store(cfg.dataDir / "candibot.db")
         try:
             if args.command == "review":
                 review(store)
             elif args.command == "retry":
                 retry(store, args.ids)
+            elif args.command == "dashboard":
+                writeDashboard(store, args.out or cfg.dataDir / "dashboard.html")
             else:
                 for status, count in sorted(store.counts().items()):
                     print(f"{status:13} {count}")
