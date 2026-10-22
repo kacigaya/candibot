@@ -15,6 +15,7 @@
   <a href="https://github.com/kacigaya/webskrap"><img alt="Navigateur WebSkrap" src="https://shieldcn.dev/badge/WebSkrap-Patchright-2ead33.svg?variant=secondary&amp;logo=playwright"></a>
   <a href="https://opencode.ai/"><img alt="Modèles gratuits OpenCode" src="https://shieldcn.dev/badge/OpenCode-mod%C3%A8les%20gratuits-171717.svg?variant=secondary"></a>
   <img alt="Compatible Linux" src="https://shieldcn.dev/badge/Linux-compatible-171717.svg?variant=secondary&amp;logo=linux">
+  <a href="https://github.com/kacigaya/candibot/blob/main/LICENSE"><img alt="Licence MIT" src="https://shieldcn.dev/github/license/kacigaya/candibot.svg?variant=secondary"></a>
 </p>
 
 ## Fonctionnalités
@@ -76,6 +77,9 @@ uv run candibot run
 | `run --send` | Envoie aussi les candidatures prêtes |
 | `run --send --wait-code` | Idem, et attend le code HelloWork dans `data/otp.txt` pendant 15 minutes au plus |
 | `status` | Nombre d'offres par statut |
+| `review` | Relit les lettres prêtes une par une : garder, modifier dans `$EDITOR` (nano par défaut) ou refuser |
+| `retry ID…` | Remet des offres `failed` ou `needs_review` dans la file d'envoi (`drafted`, ou `new` sans lettre) |
+| `check` | Vérifie les sélecteurs HelloWork : lit une recherche et une fiche, ouvre le formulaire sans le soumettre. Code de sortie 1 en cas de problème. |
 
 ### Première candidature
 
@@ -134,8 +138,8 @@ Certaines offres posent des questions après l'identité et le CV. La section `[
 | `external` | Candidature uniquement sur le site du recruteur |
 | `drafted` | Lettre prête, en attente de `--send` |
 | `applied` | Candidature confirmée dans « Mes candidatures » |
-| `needs_review` | Envoi non confirmé. Vérifiez `data/shots/<id>.png` et votre espace HelloWork avant de repostuler. |
-| `failed` | Erreur technique avant tout envoi : rien n'est parti |
+| `needs_review` | Envoi non confirmé. Vérifiez `data/shots/<id>.png` et votre espace HelloWork, puis relancez avec `candibot retry <id>`. |
+| `failed` | Erreur technique avant tout envoi : rien n'est parti. `candibot retry <id>` la remet dans la file. |
 
 ## Passage quotidien
 
@@ -186,7 +190,15 @@ journalctl -u candibot.service -n 50      # dernier passage
 
 Le passage quotidien n'attend pas de code HelloWork. Si la session expire, les offres passent en `needs_review` et vous recevez un email. Relancez alors à la main avec `--wait-code` pour vous reconnecter.
 
+Un passage échoue s'il ne trouve aucune offre dans les résultats, ou si, avec `--send`, aucun des envois tentés n'est confirmé. Au 3ᵉ échec d'affilée, candibot envoie un email d'alerte (si `[mail]` est rempli), une seule fois par série. Lancez alors `uv run candibot check`.
+
 ## Développement
+
+`tests/test_apply_browser.py` parcourt le formulaire de candidature dans Chromium, contre des pages HelloWork simulées, sans réseau. Il faut le Chromium de Patchright.
+
+Le nommage suit une convention propre au projet (camelCase), vérifiée par `tests/test_naming.py`. Voir [CONTRIBUTING.md](CONTRIBUTING.md).
+
+La CI (`.github/workflows/ci.yml`) lance ces trois vérifications à chaque push sur `main` et sur chaque pull request.
 
 ```bash
 uv run pytest -q
@@ -196,10 +208,14 @@ uv run ruff format --check .
 
 ## Limites
 
-- Les sélecteurs HelloWork ont été vérifiés le 24/09/2026. Si le site change, corrigez-les dans [`src/candibot/hellowork.py`](src/candibot/hellowork.py).
+- Les sélecteurs HelloWork ont été vérifiés le 22/10/2026. Lancez `uv run candibot check` pour les revérifier. Si le site change, corrigez-les dans [`src/candibot/hellowork.py`](src/candibot/hellowork.py) (recherche et fiches) ou [`src/candibot/application.py`](src/candibot/application.py) (formulaire).
 - « Mes candidatures » n'affiche pas l'identifiant de l'offre. La correspondance se fait donc sur le titre et l'entreprise d'une même carte. Seule la première page (les plus récentes) est lue.
 - Indeed renvoie 403 (Cloudflare) depuis les IP de datacenter, et Welcome to the Jungle exige un compte pour chercher. Ces deux sites ne sont pas gérés.
 
 ## Avertissement
 
 Ce projet est fourni à des fins éducatives. L'envoi automatique de candidatures peut enfreindre les CGU de HelloWork. Vous êtes responsable de son usage et de chaque candidature envoyée en votre nom.
+
+## Licence
+
+[MIT](LICENSE)

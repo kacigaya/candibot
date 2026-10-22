@@ -5,7 +5,7 @@ import urllib.error
 
 import pytest
 
-from candibot import hellowork, llm, mailer
+from candibot import application, hellowork, llm, mailer
 from candibot.config import Search
 from candibot.store import EXCLUDED_REASON, Store
 
@@ -255,10 +255,10 @@ def testIsListedMatchesTitleAndCompanyOnTheSameCard():
         "En cours d'envoi\nAlternant  Production de Contenus H/F\n\nMGEN\nParis - 75\nEnvoyée le 26 septembre",
         "Envoyée\nChargé de Communication H/F\nEgis Groupe\nGuyancourt",
     ]
-    assert hellowork.isListed(cards, "Alternant Production de Contenus H/F", "MGEN")
-    assert not hellowork.isListed(cards, "Alternant Production de Contenus H/F", "Egis Groupe")
-    assert not hellowork.isListed(cards, "Community Manager H/F", "MGEN")
-    assert hellowork.isListed(cards, "Chargé de Communication H/F", "Entreprise anonyme")
+    assert application.isListed(cards, "Alternant Production de Contenus H/F", "MGEN")
+    assert not application.isListed(cards, "Alternant Production de Contenus H/F", "Egis Groupe")
+    assert not application.isListed(cards, "Community Manager H/F", "MGEN")
+    assert application.isListed(cards, "Chargé de Communication H/F", "Entreprise anonyme")
 
 
 def answers():
@@ -342,3 +342,100 @@ def testPromptStatesSearchAndContracts():
     search = Search(["data analyst"], "Lyon", ("CDI", "CDD"), 1, 7, 1, 1, (0, 0), ())
     prompt = llm.buildPrompt(candidate, search, "Titre", "ACME", "Lyon", "Description")
     assert "Métiers : data analyst\nZone : Lyon\nContrats : CDI, CDD" in prompt
+
+
+def testRunProblemFlagsEmptySearchAndUnconfirmedSends():
+    from candibot.cli import runProblem
+
+    assert runProblem(0, [], send=False) == "aucune offre trouvée dans les résultats de recherche"
+    assert runProblem(30, [{"status": "drafted"}], send=False) is None
+    failed = [{"status": "failed"}, {"status": "needs_review"}]
+    assert runProblem(30, failed, send=True) == "2 envoi(s) tenté(s), aucun confirmé"
+    assert runProblem(30, failed, send=False) is None  # rien n'est envoyé en simulation
+    assert runProblem(30, [*failed, {"status": "applied"}], send=True) is None
+
+
+def testAlertMailsOncePerFailedStreak(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from candibot import cli
+    from candibot.config import Mail
+
+    sent = []
+    monkeypatch.setattr(cli.mailer, "send", lambda mail, subject, body, key: sent.append((subject, key)))
+    cfg = SimpleNamespace(mail=Mail(inbox="bot@agentmail.to", to="moi@example.com"))
+    store = Store(tmp_path / "db.sqlite")
+    cli.alert(cfg, store, "2026-10-01T07:30:00+00:00", None)
+    for day in range(2, 7):
+        cli.alert(cfg, store, f"2026-10-0{day}T07:30:00+00:00", "aucune offre trouvée")
+    assert store.failedStreak() == 5
+    assert sent == [("candibot : 3 passages en échec", "alert-2026-10-04T07:30:00+00:00")]
+    cli.alert(cfg, store, "2026-10-07T07:30:00+00:00", None)
+    assert store.failedStreak() == 0
+    store.close()
+
+
+def testReviewKeepsEditsAndRejectsLetters(tmp_path, capsys):
+    from candibot import cli
+
+    store = Store(tmp_path / "db.sqlite")
+    for offerId, score in (("1", 10), ("2", 9), ("3", 8), ("4", 7)):  # relues par note décroissante
+        store.add(hellowork.parseOffer(offerId, offerPage()))
+        store.scored(offerId, score, "proche du CV", f"Lettre {offerId}", minScore=7)
+    # 1 : modifiée après un premier essai vide ; 2 : refusée ; 3 : gardée ; 4 : jamais vue (quitter).
+    answers = iter(["m", "m", "x", "r", "g", "q"])
+    edits = iter(["", "Lettre 1 corrigée"])
+    cli.review(store, ask=lambda _: next(answers), edit=lambda _: next(edits))
+    rows = {r["id"]: r for r in store.db.execute("SELECT * FROM offers")}
+    assert rows["1"]["status"] == "drafted" and rows["1"]["letter"] == "Lettre 1 corrigée"
+    assert rows["2"]["status"] == "rejected" and rows["2"]["detail"] == cli.REVIEW_REJECTED
+    assert rows["3"]["letter"] == "Lettre 3" and rows["4"]["status"] == "drafted"
+    assert "modification ignorée" in capsys.readouterr().out
+    store.close()
+
+
+def testEditTextUsesEditorFromEnvironment(monkeypatch):
+    from pathlib import Path
+
+    from candibot import cli
+
+    calls = []
+
+    def fakeRun(cmd, check):
+        calls.append(cmd[0])
+        Path(cmd[1]).write_text(Path(cmd[1]).read_text(encoding="utf-8") + " modifié\n", encoding="utf-8")
+
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr(cli.subprocess, "run", fakeRun)
+    assert cli.editText("Bonjour") == "Bonjour modifié"
+    assert calls == ["vim"]
+
+
+def testRetryRequeuesOnlyFailedOrUnconfirmedOffers(tmp_path):
+    store = Store(tmp_path / "db.sqlite")
+    for offerId in ("1", "2", "3"):
+        store.add(hellowork.parseOffer(offerId, offerPage()))
+    store.scored("1", 9, "ok", "Lettre", minScore=7)
+    store.setStatus("1", "needs_review", "étape 2 : champs obligatoires vides")
+    store.setStatus("2", "failed", "timeout")  # jamais notée : pas de lettre
+    store.scored("3", 9, "ok", "Lettre", minScore=7)
+    store.setStatus("3", "applied", "vérifiée")
+    assert store.retry("1") == "drafted"
+    assert store.retry("2") == "new"
+    assert store.retry("3") is None and store.retry("404") is None
+    assert store.counts() == {"drafted": 1, "new": 1, "applied": 1}
+    store.close()
+
+
+def testEmptyAnswersLeaveQuestionsUnanswered():
+    from candibot.questions import Answers, answer
+
+    empty = Answers("", "", 0, "")
+    civ = [("", "Choisir"), ("1", "Madame"), ("2", "Monsieur")]
+    when = [("", "Choisir"), ("a", "Immédiate"), ("b", "Dans 1 mois")]
+    pay = [("", "Choisir"), ("a", "Moins de 1 500 €"), ("b", "1 500 € - 2 000 €")]
+    assert answer("Civilité *", civ, empty) is None
+    assert answer("Disponibilité *", when, empty) is None
+    assert answer("Salaire souhaité *", pay, empty) is None
+    assert answer("Prétentions salariales *", None, empty) is None
+    assert answer("Votre disponibilité *", None, empty) is None

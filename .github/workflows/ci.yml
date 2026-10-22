@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      # Pinned exactly: setup-uv publishes no floating major tag.
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check .
+      - name: Format
+        run: uv run ruff format --check .
+      # tests/test_apply_browser.py drives a real Chromium against simulated pages.
+      - name: Install Chromium
+        run: uv run patchright install --with-deps chromium
+      - name: Test
+        run: uv run pytest -q

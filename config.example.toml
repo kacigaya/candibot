@@ -37,13 +37,15 @@ exclude_companies = [
 
 [answers]
 # Réponses aux questions complémentaires des recruteurs (listes déroulantes et champs libres).
+# Une réponse vide (ou un salaire à 0) laisse la question sans réponse : l'offre
+# passe alors en needs_review au lieu de recevoir une réponse inventée.
 civility = "Madame"
 availability = "immédiate"
 # Salaire brut mensuel visé. Sert à choisir la tranche de salaire proposée.
 # En alternance, le minimum légal dépend de l'âge et de l'année de formation
 # (service-public.gouv.fr). Exemple : 100 % du SMIC brut, 1 867,02 €/mois en 2026.
-salary_monthly = 1867.02
-salary_text = "100 % du SMIC"
+salary_monthly = 0          # ex. 1867.02
+salary_text = ""            # ex. "100 % du SMIC"
 
 [llm]
 # Modèles gratuits d'OpenCode (liste : `opencode models opencode`), essayés dans l'ordre.
