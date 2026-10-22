@@ -5,6 +5,8 @@ description = "Bot de candidature HelloWork : CDI, CDD, intérim, stage, alterna
 authors = [
     { name = "Gaya KACI", email = "163902005+kacigaya@users.noreply.github.com" }
 ]
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "webskrap>=2.6.0",

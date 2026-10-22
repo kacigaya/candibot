@@ -15,6 +15,7 @@
   <a href="https://github.com/kacigaya/webskrap"><img alt="Navigateur WebSkrap" src="https://shieldcn.dev/badge/WebSkrap-Patchright-2ead33.svg?variant=secondary&amp;logo=playwright"></a>
   <a href="https://opencode.ai/"><img alt="Modèles gratuits OpenCode" src="https://shieldcn.dev/badge/OpenCode-mod%C3%A8les%20gratuits-171717.svg?variant=secondary"></a>
   <img alt="Compatible Linux" src="https://shieldcn.dev/badge/Linux-compatible-171717.svg?variant=secondary&amp;logo=linux">
+  <a href="https://github.com/kacigaya/candibot/blob/main/LICENSE"><img alt="Licence MIT" src="https://shieldcn.dev/github/license/kacigaya/candibot.svg?variant=secondary"></a>
 </p>
 
 ## Fonctionnalités
@@ -203,3 +204,7 @@ uv run ruff format --check .
 ## Avertissement
 
 Ce projet est fourni à des fins éducatives. L'envoi automatique de candidatures peut enfreindre les CGU de HelloWork. Vous êtes responsable de son usage et de chaque candidature envoyée en votre nom.
+
+## Licence
+
+[MIT](LICENSE)
