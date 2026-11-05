@@ -10,7 +10,7 @@ Pose les questions à l'utilisateur, puis écris `config.toml` à partir de `con
 ## Règles
 
 - Parle dans la langue de l'utilisateur. Pose 3 ou 4 questions par message, pas plus.
-- Propose des valeurs par défaut seulement pour les réglages techniques (`pages`, `min_score`, `max_scored`, `max_applications`, `pause_seconds`, `exclude_companies`, `llm.models`).
+- Propose des valeurs par défaut seulement pour les réglages techniques (`pages`, `min_score`, `max_scored`, `max_applications`, `pause_seconds`, `exclude_companies`, `llm.agent`, `llm.models`).
 - Demande toujours les données personnelles : identité, email, civilité, disponibilité, salaire, téléphone. Les valeurs de `config.example.toml` (`Madame`, `immédiate`, montant du SMIC) sont des exemples, pas des réponses. N'invente rien. Un champ facultatif sans réponse reste vide.
 - Ne demande jamais la clé AgentMail dans la conversation. L'utilisateur la saisit lui-même dans son terminal (étape 7).
 - Ne remplace jamais un fichier existant (`config.toml`, `.env`, CV) sans l'accord de l'utilisateur.
@@ -28,10 +28,10 @@ Pose les questions à l'utilisateur, puis écris `config.toml` à partir de `con
    | Emails seulement | 3, 7, 9 |
 
 2. **Prérequis.** Le bot tourne sous Linux seulement, car le bac à sable bubblewrap n'existe pas ailleurs. Sous Windows ou macOS, demande une machine Linux, une VM ou WSL 2, et arrête-toi là.
-   1. Vérifie `uv`, `opencode` et `bwrap` avec `command -v`. Si un outil manque, dis-le et donne le lien ou la commande d'installation.
+   1. Demande l'agent de notation : `opencode` (défaut, modèles gratuits), `claude` (Claude Code) ou `codex`. Vérifie `uv`, cet agent et `bwrap` avec `command -v`. Si un outil manque, dis-le et donne le lien ou la commande d'installation.
    2. Lance `uv sync`. Il installe Python 3.12 si besoin.
    3. Lance `uv run patchright install chromium` si le Chromium de Patchright manque.
-   4. Ne continue pas sans `opencode` et `bwrap` : la notation en dépend.
+   4. Ne continue pas sans l'agent et `bwrap` : la notation en dépend. Pour `claude` ou `codex`, vérifie que l'utilisateur s'est connecté une fois (`~/.claude/.credentials.json` ou `~/.codex/auth.json`).
 
 3. **Config existante.** Si `config.toml` existe, lis-le d'abord.
    - Modifie seulement les valeurs demandées. Garde les autres clés et les commentaires.
@@ -90,7 +90,7 @@ Pose les questions à l'utilisateur, puis écris `config.toml` à partir de `con
 10. **Simulation.** Propose `uv run candibot run`. Avant de demander l'accord, explique ce qu'elle fait :
     - elle n'envoie aucune candidature ;
     - elle interroge HelloWork ;
-    - elle transmet le texte du CV, le nom et la recherche au service de modèles d'OpenCode ;
+    - elle transmet le texte du CV, le nom et la recherche au service de modèles de l'agent choisi (OpenCode, Anthropic ou OpenAI) ;
     - si `[mail]` est rempli, elle envoie un email récapitulatif avec les lettres rédigées.
 
     Lance-la seulement si l'utilisateur accepte.

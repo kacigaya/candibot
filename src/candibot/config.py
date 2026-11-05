@@ -10,6 +10,10 @@ from candibot.questions import Answers
 # Sites de recherche acceptés dans `search.sites` -> nom affiché.
 SITES = {"hellowork": "HelloWork", "labonnealternance": "La bonne alternance"}
 
+# Agents acceptés dans `llm.agent` (clés de `llm.AGENTS`) -> modèles par défaut.
+# Liste vide : modèle par défaut de l'agent.
+AGENTS = {"opencode": ["opencode/big-pickle"], "claude": [], "codex": []}
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -64,7 +68,8 @@ class Config:
     candidate: Candidate
     search: Search
     lba: Lba
-    models: list[str]  # OpenCode, dans l'ordre d'essai
+    agent: str  # clé de AGENTS
+    models: list[str]  # dans l'ordre d'essai
     mail: Mail
 
     @property
@@ -118,6 +123,10 @@ def load(path: Path) -> Config:
             raise SystemExit(
                 "La bonne alternance exige un téléphone pour candidater : remplissez answers.phone"
             )
+    llmRaw = raw.get("llm", {})
+    agent = llmRaw.get("agent", "opencode")
+    if agent not in AGENTS:
+        raise SystemExit(f"llm.agent doit valoir un agent parmi : {', '.join(AGENTS)}")
     low, high = s.get("pause_seconds", [60, 180])
     if not 0 <= low <= high:
         raise SystemExit("search.pause_seconds doit valoir [min, max] avec 0 <= min <= max")
@@ -153,6 +162,7 @@ def load(path: Path) -> Config:
             excludeCompanies=tuple(p.strip() for p in s.get("exclude_companies", []) if p.strip()),
         ),
         lba=Lba(romes=romes, departements=tuple(str(d).strip() for d in lba.get("departements", []))),
-        models=list(raw.get("llm", {}).get("models", ["opencode/big-pickle"])),
+        agent=agent,
+        models=list(llmRaw.get("models", AGENTS[agent])),
         mail=Mail(inbox=m.get("inbox", ""), to=m.get("to", "")),
     )

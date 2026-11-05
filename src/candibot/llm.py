@@ -1,10 +1,12 @@
-"""Notation des offres et rédaction des lettres via les modèles gratuits d'OpenCode.
+"""Notation des offres et rédaction des lettres par un agent de code en ligne de commande.
 
-`opencode run` est un agent qui dispose d'outils (shell, fichiers, web) et que
-l'offre gratuite refuse de faire tourner sans eux. Le texte des offres venant du
-web, une annonce piégée pourrait lui faire exécuter des commandes : il tourne donc
-dans un bac à sable bubblewrap (système en lecture seule, $HOME vide et jetable,
-réseau seul ouvert), sans accès au projet, au CV ni aux clés.
+Agents pris en charge (`llm.agent`) : OpenCode (modèles gratuits), Claude Code et Codex.
+`opencode run` dispose d'outils (shell, fichiers, web) que l'offre gratuite refuse de
+retirer. Le texte des offres venant du web, une annonce piégée pourrait faire exécuter
+des commandes à l'agent : il tourne donc dans un bac à sable bubblewrap (système en
+lecture seule, $HOME vide et jetable, réseau seul ouvert), sans accès au projet, au CV
+ni aux clés. Seuls son binaire et ses identifiants de connexion y sont montés, en
+lecture seule.
 """
 
 import json
@@ -12,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -87,8 +90,8 @@ Lieu : {location}
 </offre>"""
 
 
-def parseOutput(stdout: str) -> Evaluation:
-    """Lit les événements de `opencode run --format json` et en extrait l'objet JSON rendu."""
+def opencodeReply(stdout: str) -> str:
+    """Texte rendu par `opencode run --format json` : un événement JSON par ligne."""
     texts, error = [], None
     for line in stdout.splitlines():
         try:
@@ -98,12 +101,90 @@ def parseOutput(stdout: str) -> Evaluation:
         if event.get("type") == "text":
             texts.append(event["part"]["text"])
         elif event.get("type") == "error":
-            error = (event.get("error") or {}).get("data", {}).get("message") or str(event.get("error"))
+            detail = event.get("error") or {}
+            # OpenCode 1.x : error.data.message ; 2.x : error.message.
+            error = detail.get("data", {}).get("message") or detail.get("message") or str(detail)
     if error:
-        raise RuntimeError(f"opencode : {error}")
-    match = re.search(r"\{.*\}", "".join(texts), re.S)
+        raise RuntimeError(error)
+    return "".join(texts)
+
+
+def claudeReply(stdout: str) -> str:
+    """Texte rendu par `claude -p --output-format json` : un objet `result` en dernière ligne."""
+    for line in reversed(stdout.splitlines()):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "result":
+            if event.get("is_error"):
+                raise RuntimeError(str(event.get("result") or event.get("terminal_reason")))
+            return str(event.get("result", ""))
+    raise RuntimeError("aucun résultat")
+
+
+def codexReply(stdout: str) -> str:
+    """Texte rendu par `codex exec --json` : le dernier message de l'agent."""
+    text, error = None, None
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        item = event.get("item") or {}
+        if event.get("type") == "item.completed" and item.get("type") == "agent_message":
+            text = item.get("text", "")
+        elif event.get("type") == "turn.failed":
+            error = (event.get("error") or {}).get("message")
+        elif event.get("type") == "error":
+            error = error or event.get("message")
+    if error or text is None:
+        raise RuntimeError(error or "aucun message")
+    return text
+
+
+@dataclass(frozen=True)
+class Agent:
+    rootDepth: int  # dossiers remontés depuis le binaire réel jusqu'au dossier à monter
+    credentials: tuple[str, ...]  # fichiers relatifs au $HOME, montés en lecture seule
+    args: tuple[str, ...]  # le modèle puis le prompt suivent
+    modelFlag: str
+    reply: Callable[[str], str]
+
+
+# Les clés doivent rester celles de `config.AGENTS`.
+AGENTS = {
+    # ~/.opencode/bin/opencode. L'offre gratuite refuse un agent sans ses outils.
+    # `--standalone` : serveur privé, sans le service d'arrière-plan absent du bac à sable.
+    "opencode": Agent(2, (), ("run", "--standalone", "--format", "json"), "-m", opencodeReply),
+    # ~/.local/share/claude/versions/<version>. `--tools ""` retire tous les outils.
+    "claude": Agent(
+        1,
+        (".claude/.credentials.json",),
+        ("-p", "--tools", "", "--no-session-persistence", "--output-format", "json"),
+        "--model",
+        claudeReply,
+    ),
+    # .../releases/<version>/bin/codex. Ses commandes shell restent en lecture seule.
+    "codex": Agent(
+        2,
+        (".codex/auth.json",),
+        ("exec", "--json", "--skip-git-repo-check", "--ephemeral", "-s", "read-only"),
+        "-m",
+        codexReply,
+    ),
+}
+
+
+def parseOutput(agent: str, stdout: str) -> Evaluation:
+    """Extrait l'objet JSON de la réponse de l'agent et le valide."""
+    try:
+        text = AGENTS[agent].reply(stdout)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{agent} : {exc}") from None
+    match = re.search(r"\{.*\}", text, re.S)
     if not match:
-        raise RuntimeError("opencode n'a pas rendu d'objet JSON")
+        raise RuntimeError(f"{agent} n'a pas rendu d'objet JSON")
     out = json.loads(match.group(0))
     score = int(out["score"])
     if not 0 <= score <= 10:
@@ -117,14 +198,19 @@ def parseOutput(stdout: str) -> Evaluation:
     return Evaluation(score=score, reason=str(out["reason"]).strip(), letter=letter)
 
 
-def sandboxCommand(opencode: Path, home: Path, args: list[str]) -> list[str]:
-    """`opencode` lancé par bubblewrap : seul son binaire est visible dans le $HOME."""
-    binaryDir = opencode.parent.parent  # ~/.opencode, qui contient bin/opencode
+def sandboxCommand(agent: str, binary: Path, home: Path, args: list[str]) -> list[str]:
+    """L'agent lancé par bubblewrap : seuls son binaire et ses identifiants sont visibles dans le $HOME."""
+    spec = AGENTS[agent]
+    binaryDir = binary.parents[spec.rootDepth - 1]
+    credentials = []
+    for name in spec.credentials:
+        credentials += ["--ro-bind-try", str(home / name), str(home / name)]
     return [
         "bwrap",
         "--ro-bind", "/", "/",
         "--tmpfs", str(home),
         "--ro-bind", str(binaryDir), str(binaryDir),
+        *credentials,
         "--tmpfs", "/tmp",
         "--tmpfs", "/var/tmp",
         "--dev", "/dev",
@@ -137,7 +223,8 @@ def sandboxCommand(opencode: Path, home: Path, args: list[str]) -> list[str]:
         "--chdir", str(home / "work"),
         "--setenv", "HOME", str(home),
         "--unsetenv", "AGENTMAIL_API_KEY",
-        str(opencode),
+        "--unsetenv", "LBA_API_KEY",
+        str(binary),
         *args,
     ]  # fmt: skip
 
@@ -145,6 +232,7 @@ def sandboxCommand(opencode: Path, home: Path, args: list[str]) -> list[str]:
 def evaluate(
     candidate: Candidate,
     search: Search,
+    agent: str,
     models: list[str],
     *,
     title: str,
@@ -152,23 +240,26 @@ def evaluate(
     location: str,
     description: str,
 ) -> Evaluation:
-    """Note l'offre avec le premier modèle qui répond correctement (les suivants servent de secours)."""
-    found = shutil.which("opencode")
+    """Note l'offre avec le premier modèle qui répond correctement (les suivants servent de secours).
+
+    Sans modèle listé, l'agent utilise son modèle par défaut.
+    """
+    found = shutil.which(agent)
     if not found or not shutil.which("bwrap"):
-        raise RuntimeError("`opencode` et `bwrap` sont requis")
-    opencode = Path(os.path.realpath(found))
+        raise RuntimeError(f"`{agent}` et `bwrap` sont requis")
+    binary = Path(os.path.realpath(found))
+    spec = AGENTS[agent]
     prompt = f"{SYSTEM}\n\n{buildPrompt(candidate, search, title, company, location, description)}\n\n{JSON_CONTRACT}"
     errors = []
-    for model in models:
-        cmd = sandboxCommand(
-            opencode, Path.home(), ["run", "--pure", "-m", model, "--format", "json", prompt]
-        )
+    for model in models or [""]:
+        modelArgs = [spec.modelFlag, model] if model else []
+        cmd = sandboxCommand(agent, binary, Path.home(), [*spec.args, *modelArgs, prompt])
         try:
-            # stdin fermé : sans cela `opencode run` attend une entrée et ne rend jamais la main.
+            # stdin fermé : sans cela `opencode run` et `codex exec` attendent une entrée.
             proc = subprocess.run(
                 cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300, check=False
             )
-            return parseOutput(proc.stdout)
+            return parseOutput(agent, proc.stdout)
         except (RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired) as exc:
-            errors.append(f"{model} : {exc}")
+            errors.append(f"{model or 'modèle par défaut'} : {exc}")
     raise RuntimeError(" ; ".join(errors))

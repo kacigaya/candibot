@@ -61,7 +61,12 @@ salary_text = ""            # ex. "100 % du SMIC"
 phone = ""                  # ex. "06 12 34 56 78"
 
 [llm]
-# Modèles gratuits d'OpenCode (liste : `opencode models opencode`), essayés dans l'ordre.
+# Agent qui note les offres et rédige les lettres : "opencode", "claude" (Claude Code)
+# ou "codex". Il doit être installé et connecté sur cette machine.
+agent = "opencode"
+# Modèles essayés dans l'ordre. Liste vide : modèle par défaut de l'agent.
+# OpenCode : modèles gratuits (liste : `opencode models`).
+# Claude Code : ex. ["sonnet", "haiku"]. Codex : un modèle de votre compte (`/model`).
 models = ["opencode/big-pickle", "opencode/mimo-v2.6-flash-free"]
 
 [mail]

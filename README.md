@@ -22,7 +22,7 @@
 
 - Cherche les offres sur les sites choisis (`search.sites`) : HelloWork pour chacune de vos requêtes, filtrées sur les types de contrat choisis (`search.contracts`), et La bonne alternance par son API publique
 - Écarte les offres des écoles, CFA et organismes de formation qui recrutent pour leur propre cursus, avant tout appel au modèle
-- Note chaque offre sur 10 par rapport à votre CV avec un modèle gratuit d'OpenCode, isolé dans bubblewrap
+- Note chaque offre sur 10 par rapport à votre CV avec l'agent de votre choix (`llm.agent`) : un modèle gratuit d'OpenCode, Claude Code ou Codex, isolé dans bubblewrap
 - Rédige un message de 120 à 200 mots au recruteur, à partir des seuls faits de votre CV
 - Remplit et envoie le formulaire HelloWork étape par étape, avec des mouvements de souris humains, ou le formulaire « Candidature simplifiée » de La bonne alternance (seulement avec `--send`)
 - Consulte la page « Mes candidatures » avant et après chaque envoi, pour ne jamais postuler deux fois
@@ -43,8 +43,8 @@
 | Outil | Rôle |
 | --- | --- |
 | [uv](https://docs.astral.sh/uv/) | Python 3.12 et dépendances |
-| [opencode](https://opencode.ai/) | Notation et lettres, avec les modèles gratuits `opencode/*` |
-| [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) | Bac à sable pour OpenCode |
+| Un agent : [opencode](https://opencode.ai/) (défaut), [Claude Code](https://code.claude.com/) ou [Codex](https://github.com/openai/codex) | Notation et lettres. OpenCode utilise ses modèles gratuits `opencode/*`. Claude Code et Codex utilisent votre compte : connectez-vous une fois hors de candibot. |
+| [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) | Bac à sable pour l'agent |
 | Chromium de Patchright | Navigateur. Lancer `uv run patchright install chromium` s'il manque. |
 
 ### Mise en place
@@ -151,7 +151,7 @@ Ces emails vous sont destinés. candibot n'écrit jamais aux recruteurs.
 
 1. **Recherche.** Pour chaque requête, candibot lit les résultats HelloWork filtrés sur les contrats de `search.contracts` (par exemple `["CDI", "CDD"]`), puis ouvre chaque nouvelle offre. La fiche contient un bloc JSON-LD `JobPosting`, sauf pour les offres anonymes, lues dans le HTML. Sur La bonne alternance, une seule recherche par l'API couvre tous les codes de `labonnealternance.romes`. Elle renvoie 150 offres au plus par source.
 2. **Filtrage.** Les offres des entreprises de `search.exclude_companies` sont écartées sans appel au modèle. Ce sont surtout des écoles qui publient des offres pour recruter des étudiants dans leurs cursus. Elles forment la majorité des offres d'alternance et de stage sur HelloWork.
-3. **Notation.** Un modèle OpenCode (`llm.models`, essayés dans l'ordre) note l'offre et rédige le message à partir de `data/cv.md`. Une lettre qui contient des caractères hors alphabet latin est refusée et confiée au modèle suivant.
+3. **Notation.** L'agent de `llm.agent` (`opencode`, `claude` ou `codex`) note l'offre avec les modèles de `llm.models`, essayés dans l'ordre. Sans modèle listé, il utilise son modèle par défaut. Il et rédige le message à partir de `data/cv.md`. Une lettre qui contient des caractères hors alphabet latin est refusée et confiée au modèle suivant.
 4. **Envoi** (seulement avec `--send`). Sur La bonne alternance, candibot remplit l'identité, le téléphone, le CV et le message, puis attend le message de confirmation. Sur HelloWork, il remplit l'identité, le CV, le message et les CGU, puis avance d'étape en étape. Il s'arrête en `needs_review`, avec une capture d'écran de chaque étape, si une étape contient un champ obligatoire qu'il ne sait pas remplir ou si la candidature n'apparaît pas dans « Mes candidatures ».
 5. **Compte rendu.** Un email par candidature `applied` ou `needs_review`, avec l'offre et le message envoyé, puis le récapitulatif du passage. Chaque envoi porte une clé d'idempotence : un nouvel essai du même passage n'envoie pas de doublon.
 
@@ -159,7 +159,15 @@ Chaque offre n'est traitée qu'une fois. Le suivi est stocké dans `data/candibo
 
 ### Bac à sable
 
-OpenCode est un agent qui a des outils (shell, fichiers), et le texte des offres vient d'Internet. Il tourne donc dans bubblewrap, avec le système en lecture seule, un `$HOME` vide et jetable, et seulement le réseau. La clé AgentMail est retirée de son environnement.
+L'agent a des outils (shell, fichiers), et le texte des offres vient d'Internet. Il tourne donc dans bubblewrap, avec le système en lecture seule, un `$HOME` vide et jetable, et seulement le réseau. Les clés AgentMail et La bonne alternance sont retirées de son environnement.
+
+| Agent | Monté en lecture seule | Outils |
+| --- | --- | --- |
+| `opencode` | `~/.opencode` | Tous : l'offre gratuite refuse un agent modifié |
+| `claude` | Binaire, `~/.claude/.credentials.json` | Aucun (`--tools ""`) |
+| `codex` | Binaire, `~/.codex/auth.json` | Shell en lecture seule (`-s read-only`) |
+
+Le fichier d'identifiants est en lecture seule : l'agent ne peut pas y écrire un jeton renouvelé. Si la notation échoue pour une connexion expirée, lancez `claude` ou `codex` une fois hors de candibot.
 
 ### Questions des recruteurs
 
@@ -202,7 +210,7 @@ After=network-online.target
 Type=oneshot
 User=vous
 WorkingDirectory=/chemin/vers/candibot
-# uv, opencode et bwrap doivent être dans le PATH.
+# uv, l'agent de llm.agent et bwrap doivent être dans le PATH.
 Environment=PATH=/home/vous/.local/bin:/home/vous/.opencode/bin:/usr/local/bin:/usr/bin:/bin
 # Le verrou empêche deux passages de partager le profil navigateur.
 ExecStart=/usr/bin/flock -n /chemin/vers/candibot/data/candibot.lock uv run candibot run --send

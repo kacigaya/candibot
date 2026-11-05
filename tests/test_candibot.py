@@ -110,11 +110,11 @@ def events(*texts: str, error: str | None = None) -> str:
 
 def testParseOutputReadsJsonFromTextEvents():
     stdout = events('Voici :\n{"score": 8, "reason": " ok ",', ' "letter": " Bonjour "}')
-    assert llm.parseOutput(stdout) == llm.Evaluation(8, "ok", "Bonjour")
+    assert llm.parseOutput("opencode", stdout) == llm.Evaluation(8, "ok", "Bonjour")
     french = events(
         '{"score": 7, "reason": "ok", "letter": "Disponible dès l’été — « 3 semaines », 1 000 € œuvre…"}'
     )
-    assert llm.parseOutput(french).score == 7
+    assert llm.parseOutput("opencode", french).score == 7
 
 
 @pytest.mark.parametrize(
@@ -122,6 +122,7 @@ def testParseOutputReadsJsonFromTextEvents():
     [
         events(error="OpenCode's free tier can only be used from within OpenCode"),
         events("texte libre sans JSON"),
+        json.dumps({"type": "error", "error": {"message": "Free usage limit reached"}}),
         events('{"score": 12, "reason": "", "letter": ""}'),
         events('{"score": 8, "reason": "ok", "letter": "  "}'),
         events('{"score": 9, "reason": "ok", "letter": "Bonjour, pour 构建 la notoriété"}'),
@@ -129,19 +130,59 @@ def testParseOutputReadsJsonFromTextEvents():
 )
 def testParseOutputRejectsBadResults(stdout):
     with pytest.raises(RuntimeError):
-        llm.parseOutput(stdout)
+        llm.parseOutput("opencode", stdout)
+
+
+def testParseOutputReadsClaudeAndCodex():
+    reply = json.dumps('{"score": 8, "reason": "ok", "letter": "Bonjour"}')
+    claude = f'[claude-code:info] x\n{{"type": "result", "is_error": false, "result": {reply}}}'
+    assert llm.parseOutput("claude", claude) == llm.Evaluation(8, "ok", "Bonjour")
+    codex = "\n".join(
+        json.dumps(e)
+        for e in (
+            {"type": "thread.started"},
+            {"type": "item.completed", "item": {"type": "error", "message": "avertissement"}},
+            {"type": "item.completed", "item": {"type": "agent_message", "text": json.loads(reply)}},
+        )
+    )
+    assert llm.parseOutput("codex", codex).score == 8
+
+
+@pytest.mark.parametrize(
+    ("agent", "stdout"),
+    [
+        ("claude", '{"type": "result", "is_error": true, "result": "modèle inconnu"}'),
+        ("claude", "pas de JSON"),
+        ("codex", json.dumps({"type": "turn.failed", "error": {"message": "modèle refusé"}})),
+    ],
+)
+def testParseOutputRejectsAgentErrors(agent, stdout):
+    with pytest.raises(RuntimeError, match=agent):
+        llm.parseOutput(agent, stdout)
+
+
+def testAgentsMatchConfig():
+    from candibot import config
+
+    assert llm.AGENTS.keys() == config.AGENTS.keys()
 
 
 def testSandboxHidesHomeAndKeepsOnlyNetwork():
     from pathlib import Path
 
-    cmd = llm.sandboxCommand(Path("/h/.opencode/bin/opencode"), Path("/h"), ["run", "x"])
+    cmd = llm.sandboxCommand("opencode", Path("/h/.opencode/bin/opencode"), Path("/h"), ["run", "x"])
     assert cmd[:4] == ["bwrap", "--ro-bind", "/", "/"]
     assert ["--tmpfs", "/h"] == cmd[4:6]  # $HOME vide : ni projet, ni .env, ni clés SSH
     assert ["--ro-bind", "/h/.opencode", "/h/.opencode"] == cmd[6:9]
     assert "--unshare-all" in cmd and "--share-net" in cmd
     assert cmd[cmd.index("--unsetenv") + 1] == "AGENTMAIL_API_KEY"
+    assert "LBA_API_KEY" in cmd
+    assert "--ro-bind-try" not in cmd
     assert cmd[-3:] == ["/h/.opencode/bin/opencode", "run", "x"]
+    claude = llm.sandboxCommand("claude", Path("/h/.local/share/claude/versions/2.1"), Path("/h"), [])
+    assert ["--ro-bind", "/h/.local/share/claude/versions"] == claude[6:8]
+    creds = "/h/.claude/.credentials.json"
+    assert ["--ro-bind-try", creds, creds] == claude[9:12]  # lecture seule, jamais tout ~/.claude
 
 
 def testRenderGroupsByStatus(tmp_path):
@@ -419,6 +460,17 @@ def testConfigRequiresKnownContracts(tmp_path):
             load(writeConfig(tmp_path, bad))
 
 
+def testConfigPicksAgent(tmp_path):
+    from candibot.config import load
+
+    cfg = load(writeConfig(tmp_path, 'contracts = ["CDI"]'))
+    assert (cfg.agent, cfg.models) == ("opencode", ["opencode/big-pickle"])
+    cfg = load(writeConfig(tmp_path, 'contracts = ["CDI"]\n[llm]\nagent = "claude"'))
+    assert (cfg.agent, cfg.models) == ("claude", [])
+    with pytest.raises(SystemExit, match="llm.agent"):
+        load(writeConfig(tmp_path, 'contracts = ["CDI"]\n[llm]\nagent = "gemini"'))
+
+
 def testPromptStatesSearchAndContracts():
     from pathlib import Path
 
@@ -642,6 +694,7 @@ def testScoreSpendsLeftoverBudgetOnExternalOffers(tmp_path, monkeypatch):
     cfg = type("Cfg", (), {})()
     cfg.search = Search([], "", ("CDI",), 1, 7, 2, 10, (0, 0), ())  # max_scored = 2
     cfg.candidate = cfg.models = None
+    cfg.agent = "opencode"
     cli.score(cfg, store)
     assert store.counts() == {"drafted": 1, "external": 2}
     assert len(store.unscoredExternal()) == 1  # 1 offre notée + 1 externe = budget de 2
@@ -667,6 +720,7 @@ def testExternalCopiesAreScoredOnce(tmp_path, monkeypatch):
     cfg = type("Cfg", (), {})()
     cfg.search = Search([], "", ("CDI",), 1, 7, 1, 10, (0, 0), ())  # une seule notation permise
     cfg.candidate = cfg.models = None
+    cfg.agent = "opencode"
     cli.score(cfg, store)
     assert len(calls) == 1  # la copie écartée n'a pas pris la seule place
     assert store.counts() == {"external": 1, "rejected": 1}
@@ -740,6 +794,7 @@ def testDuplicatesDoNotUseTheBudgetOfNewOffers(tmp_path, monkeypatch):
     cfg = type("Cfg", (), {})()
     cfg.search = Search([], "", ("CDI",), 1, 7, 1, 10, (0, 0), ())  # une seule notation permise
     cfg.candidate = cfg.models = None
+    cfg.agent = "opencode"
     cli.score(cfg, store)
     assert store.counts() == {"applied": 1, "rejected": 1, "drafted": 1}
     store.close()

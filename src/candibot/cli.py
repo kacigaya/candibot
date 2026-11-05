@@ -92,7 +92,7 @@ def collectLba(cfg: Config, store: Store) -> int:
 
 
 def score(cfg: Config, store: Store) -> None:
-    for tool in ("opencode", "bwrap"):
+    for tool in (cfg.agent, "bwrap"):
         if shutil.which(tool) is None:
             raise SystemExit(f"`{tool}` introuvable dans le PATH (ajouter ~/.local/bin pour cron)")
     # Les offres exclues ne coûtent pas d'appel au modèle : on les écarte avant la limite max_scored.
@@ -137,6 +137,7 @@ def evaluate(cfg: Config, store: Store, row, passing: str) -> None:
         result = llm.evaluate(
             cfg.candidate,
             cfg.search,
+            cfg.agent,
             cfg.models,
             title=row["title"],
             company=row["company"],
