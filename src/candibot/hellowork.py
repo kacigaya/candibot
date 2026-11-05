@@ -41,7 +41,8 @@ class Offer:
     company: str
     location: str
     description: str
-    onSite: bool  # candidature possible sur HelloWork, sans passer par le site du recruteur
+    onSite: bool  # candidature possible par candibot, sans passer par le site du recruteur
+    site: str = "hellowork"  # clé de config.SITES
 
 
 def searchUrl(query: str, location: str, contracts: tuple[str, ...], page: int) -> str:
@@ -60,7 +61,7 @@ def parseSearch(pageHtml: str) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
-def _text(fragment: str) -> str:
+def htmlText(fragment: str) -> str:
     """HTML de description -> texte brut lisible."""
     fragment = re.sub(r"<br\s*/?>|</p>|</li>|</h\d>", "\n", fragment, flags=re.I)
     fragment = re.sub(r"<li[^>]*>", "- ", fragment, flags=re.I)
@@ -98,7 +99,7 @@ def _parseAnonymous(offerId: str, pageHtml: str) -> Offer | None:
         title=html.unescape(title.group(1)).strip(),
         company="Entreprise anonyme",
         location=f"département {department.group(1)}" if department else "",
-        description=_text(pageHtml[start.start() : start.start() + 15_000])[:8000],
+        description=htmlText(pageHtml[start.start() : start.start() + 15_000])[:8000],
         onSite=not EXTERNAL.search(pageHtml),
     )
 
@@ -122,7 +123,7 @@ def parseOffer(offerId: str, pageHtml: str) -> Offer | None:
             title=html.unescape(data.get("title", "")).strip(),
             company=html.unescape(company).strip(),
             location=_location(data),
-            description=_text(data.get("description", "")),
+            description=htmlText(data.get("description", "")),
             onSite=not EXTERNAL.search(pageHtml),
         )
     return _parseAnonymous(offerId, pageHtml)

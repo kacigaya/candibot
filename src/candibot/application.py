@@ -30,11 +30,11 @@ OTP_STEP = re.compile(r"saisissez le code", re.I)
 
 @dataclass(frozen=True)
 class ApplyResult:
-    status: str  # applied | needs_review | external | rejected (annonce d'école, offre expirée)
+    status: str  # applied | needs_review | external | rejected (annonce d'école, offre expirée) | failed
     detail: str
 
 
-async def _humanClick(session: WebSkrapSession, page: Page, selector: str) -> None:
+async def humanClick(session: WebSkrapSession, page: Page, selector: str) -> None:
     """Clic à la souris sur une trajectoire humaine (WebSkrap).
 
     `human_click` clique à des coordonnées : si un calque recouvre la cible,
@@ -251,7 +251,7 @@ async def apply(
     if not await page.locator("[data-cy='applyButtonHeader']").count() and EXPIRED.search(content):
         return ApplyResult("rejected", "offre expirée")
 
-    await _humanClick(session, page, "[data-cy='applyButtonHeader'] >> nth=0")
+    await humanClick(session, page, "[data-cy='applyButtonHeader'] >> nth=0")
     zone = page.locator(APPLY)
     await zone.locator("[data-cy='submitButton']").wait_for(state="attached", timeout=15_000)
 
@@ -271,7 +271,7 @@ async def apply(
 
     if letter:
         if not await zone.locator("#cover-letter-collapse-funnel").is_checked():
-            await _humanClick(session, page, f"{APPLY} label[for='cover-letter-collapse-funnel']")
+            await humanClick(session, page, f"{APPLY} label[for='cover-letter-collapse-funnel']")
         await zone.locator("textarea[name='MotivationLetter']").fill(letter)
 
     cgu = zone.locator("input[name='HasAcceptedCGU']")
@@ -296,7 +296,7 @@ async def apply(
                 await page.screenshot(path=screenshot, full_page=True)
                 return ApplyResult("needs_review", f"étape {step} : champs obligatoires vides {missing}")
             await page.screenshot(path=shot(f"etape{step}-avant"), full_page=True)
-            await _humanClick(session, page, submitSelector)
+            await humanClick(session, page, submitSelector)
             clicked = step
             await _settle(page)
             await page.screenshot(path=shot(f"etape{step}-apres"), full_page=True)

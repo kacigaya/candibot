@@ -6,7 +6,7 @@ import urllib.request
 from sqlite3 import Row
 from urllib.parse import quote
 
-from candibot.config import Mail
+from candibot.config import SITES, Mail
 from candibot.store import EXCLUDED_REASON, FOLLOW_UP_DAYS
 
 SECTIONS = [
@@ -63,14 +63,20 @@ def render(rows: list[Row], sent: bool, followUps: list[Row] = ()) -> str:
 def confirmation(row: Row, status: str, detail: str) -> tuple[str, str]:
     """Sujet et corps de l'email envoyé à la candidate après une tentative de candidature."""
     offer = f"{row['title']} · {row['company']}"
+    site = SITES[row["site"]]
     if status == "applied":
         subject = f"Candidature envoyée : {offer}"
-        intro = "Ta candidature a été envoyée sur HelloWork."
+        intro = f"Ta candidature a été envoyée sur {site}."
     else:
         subject = f"Candidature à vérifier : {offer}"
+        where = (
+            "ton espace HelloWork (Mes candidatures)"
+            if row["site"] == "hellowork"
+            else f"tes emails de {site}"
+        )
         intro = (
-            "Le bot n'a pas pu confirmer l'envoi de cette candidature. Vérifie dans ton espace "
-            "HelloWork (Mes candidatures) avant de repostuler, pour éviter un doublon."
+            f"Le bot n'a pas pu confirmer l'envoi de cette candidature. Vérifie dans {where} "
+            "avant de repostuler, pour éviter un doublon."
         )
     lines = [
         intro,

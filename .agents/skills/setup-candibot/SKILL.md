@@ -51,13 +51,14 @@ Pose les questions à l'utilisateur, puis écris `config.toml` à partir de `con
    5. Si `pdftotext` manque ou si le texte est vide (PDF scanné), demande à l'utilisateur de coller ou de fournir une version texte.
    6. Ne termine pas avec un CV texte vide. Le modèle note les offres et rédige les lettres à partir de ce texte seulement. Un oubli dans ce fichier ne sera jamais cité.
 
-6. **Recherche et réponses** (sections `[search]` et `[answers]`) :
+6. **Recherche et réponses** (sections `[search]`, `[labonnealternance]` et `[answers]`) :
+   - sites (`sites`) : `hellowork`, `labonnealternance`, ou les deux. Propose `labonnealternance` seulement si `contracts` contient `Alternance`. Il demande alors une clé d'API `LBA_API_KEY` dans `.env` (même méthode que la clé AgentMail de l'étape 7), des codes ROME dans `labonnealternance.romes`, et un téléphone. Aide l'utilisateur à trouver ses codes ROME à partir de ses métiers, puis fais-les-lui confirmer. Mets les départements de `location` dans `labonnealternance.departements`. Une clé « production » suffit : pas de clé « sandbox », qui renvoie des offres de test ;
    - métiers recherchés (`queries`) : 2 à 4 requêtes courtes, comme sur HelloWork ;
    - lieu (`location`) : ville, département ou région ;
    - types de contrat (`contracts`, obligatoire) : un ou plusieurs parmi `CDI`, `CDD`, `Intérim`, `Stage`, `Alternance`, `Indépendant`, `Freelance`, `Franchise`, `Associé`, `Fonctionnaire`, `Stage de lycée`. Écris les valeurs exactement ainsi. Plusieurs contrats donnent les offres de chacun ;
    - `exclude_companies` écarte les écoles qui recrutent pour leur cursus. Garde la liste en alternance et en stage. Pour des CDI ou CDD seulement, propose de la vider. Propose d'ajouter des écoles si l'utilisateur en connaît ;
    - civilité (`civility`) : texte exact de l'option HelloWork, `Madame` ou `Monsieur` ;
-   - téléphone (`phone`, facultatif) : certains recruteurs l'exigent. Vide, ces offres passent en `needs_review` ;
+   - téléphone (`phone`, facultatif, obligatoire avec `labonnealternance`) : certains recruteurs l'exigent. Vide, ces offres passent en `needs_review` ;
    - salaire brut mensuel visé (`salary_monthly`, nombre) et réponse libre (`salary_text`). En alternance, le minimum légal dépend de l'âge et de l'année de formation : renvoie l'utilisateur vers service-public.gouv.fr s'il ne connaît pas son montant.
 
    **Disponibilité.** Déduis les deux champs de la même réponse de l'étape 4, puis confirme-les avec l'utilisateur :
@@ -81,7 +82,7 @@ Pose les questions à l'utilisateur, puis écris `config.toml` à partir de `con
 9. **Vérification.** Lance :
 
    ```bash
-   uv run python -c "from pathlib import Path; from candibot.config import load; c = load(Path('config.toml')); print(c.candidate.firstName, c.search.queries, c.search.contracts, c.mail.enabled)"
+   uv run python -c "from pathlib import Path; from candibot.config import load; c = load(Path('config.toml')); print(c.candidate.firstName, c.search.sites, c.search.queries, c.search.contracts, c.lba, c.mail.enabled)"
    ```
 
    Corrige toute erreur et relance.
