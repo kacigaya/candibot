@@ -1,9 +1,9 @@
-"""Bot de candidature sur HelloWork (CDI, CDD, alternance, stage…).
+"""Bot de candidature sur HelloWork et La bonne alternance (CDI, CDD, alternance, stage…).
 
 candibot run            cherche, note et rédige, sans rien envoyer
 candibot run --send     envoie aussi les candidatures prêtes
 candibot status         compte les offres par statut
-candibot check          vérifie les sélecteurs HelloWork, sans rien envoyer
+candibot check          vérifie les sites choisis (sélecteurs HelloWork, API), sans rien envoyer
 candibot review         relit les lettres prêtes : garder, modifier ou refuser
 candibot retry ID…      remet des offres failed ou needs_review dans la file d'envoi
 candibot dashboard      écrit le tableau de bord HTML dans data/dashboard.html
@@ -24,7 +24,7 @@ from pathlib import Path
 
 from webskrap import SessionConfig, WebSkrapClient, WebSkrapSession
 
-from candibot import application, dashboard, hellowork, llm, mailer
+from candibot import application, dashboard, hellowork, labonnealternance, llm, mailer
 from candibot.config import Config, load
 from candibot.store import EXCLUDED_REASON, OUTCOMES, Store
 
@@ -74,6 +74,21 @@ async def collect(page, cfg: Config, store: Store) -> int:
             store.add(offer, query)
             await asyncio.sleep(random.uniform(1, 3))
     return found
+
+
+def collectLba(cfg: Config, store: Store) -> int:
+    """Enregistre les nouvelles offres de La bonne alternance. Renvoie le nombre d'offres trouvées."""
+    query = "La bonne alternance " + ", ".join(cfg.lba.romes)
+    try:
+        offers = labonnealternance.search(cfg.lba.romes, cfg.lba.departements)
+    except Exception as exc:  # noqa: BLE001 - HelloWork peut encore trouver des offres dans ce passage
+        log(f"La bonne alternance : recherche impossible ({str(exc).splitlines()[0]})")
+        return 0
+    fresh = [o for o in offers if not store.known(o.id)]
+    log(f"La bonne alternance : {len(offers)} offres, {len(fresh)} nouvelles")
+    for offer in fresh:
+        store.add(offer, query)
+    return len(offers)
 
 
 def score(cfg: Config, store: Store) -> None:
@@ -155,8 +170,9 @@ def codeWaiter(path: Path, timeoutS: int = 900):
 
 
 async def sendApplications(session: WebSkrapSession, page, cfg: Config, store: Store, otp=None) -> None:
+    """Envoie les lettres prêtes des sites choisis."""
     # Pas de LIMIT ici : les doublons écartés ne doivent pas consommer la limite d'envois.
-    rows = store.byStatus("drafted")
+    rows = [r for r in store.byStatus("drafted") if r["site"] in cfg.search.sites]
     shots = cfg.dataDir / "shots"
     shots.mkdir(parents=True, exist_ok=True)
     c = cfg.candidate
@@ -177,21 +193,35 @@ async def sendApplications(session: WebSkrapSession, page, cfg: Config, store: S
             await asyncio.sleep(random.uniform(*cfg.search.pauseSeconds))
         attempts += 1
         try:
-            result = await application.apply(
-                session,
-                page,
-                row["url"],
-                title=row["title"],
-                company=row["company"],
-                firstName=c.firstName,
-                lastName=c.lastName,
-                email=c.email,
-                cvPdf=c.cvPdf,
-                letter=row["letter"],
-                screenshot=shots / f"{row['id']}.png",
-                answers=cfg.answers,
-                otp=otp,
-            )
+            if row["site"] == labonnealternance.SITE:
+                result = await labonnealternance.apply(
+                    session,
+                    page,
+                    row["url"],
+                    firstName=c.firstName,
+                    lastName=c.lastName,
+                    email=c.email,
+                    phone=cfg.answers.phone,
+                    cvPdf=c.cvPdf,
+                    letter=row["letter"],
+                    screenshot=shots / f"{row['id']}.png",
+                )
+            else:
+                result = await application.apply(
+                    session,
+                    page,
+                    row["url"],
+                    title=row["title"],
+                    company=row["company"],
+                    firstName=c.firstName,
+                    lastName=c.lastName,
+                    email=c.email,
+                    cvPdf=c.cvPdf,
+                    letter=row["letter"],
+                    screenshot=shots / f"{row['id']}.png",
+                    answers=cfg.answers,
+                    otp=otp,
+                )
             store.setStatus(row["id"], result.status, result.detail)
             log(f"  {result.status} : {row['title']} · {row['company']} ({result.detail})")
         except Exception as exc:  # noqa: BLE001 - une offre cassée ne doit pas arrêter les suivantes
@@ -232,7 +262,7 @@ def alert(cfg: Config, store: Store, started: str, problem: str | None) -> None:
     body = (
         f"Les {streak} derniers passages de candibot ont échoué.\n"
         f"Dernière cause : {problem}\n\n"
-        "Lancez `uv run candibot check` pour vérifier les sélecteurs HelloWork, "
+        "Lancez `uv run candibot check` pour vérifier les sites choisis, "
         "et consultez data/logs/ et data/shots/."
     )
     try:
@@ -270,16 +300,29 @@ async def openPage(session: WebSkrapSession):
 
 
 async def check(cfg: Config) -> bool:
-    """Vérifie les sélecteurs HelloWork sur la première requête. Vrai si tout est trouvé."""
+    """Vérifie chaque site choisi : sélecteurs HelloWork sur la première requête, recherche par l'API
+    de La bonne alternance. Vrai si tout est trouvé."""
+    problems: list[str] = []
     async with WebSkrapClient(default_config=browserConfig(cfg)) as client:
         page = await openPage(await client.session("hellowork"))
-        problems = await application.check(
-            page, cfg.search.queries[0], cfg.search.location, cfg.search.contracts
-        )
+        if "hellowork" in cfg.search.sites:
+            problems += await application.check(
+                page, cfg.search.queries[0], cfg.search.location, cfg.search.contracts
+            )
+        if labonnealternance.SITE in cfg.search.sites:
+            try:
+                offers = labonnealternance.search(cfg.lba.romes, cfg.lba.departements)
+            except Exception as exc:  # noqa: BLE001 - signalé comme problème, pas comme plantage
+                offers = []
+                problems.append(f"La bonne alternance : recherche impossible ({str(exc).splitlines()[0]})")
+            else:
+                if not offers:
+                    problems.append("La bonne alternance : aucune offre pour labonnealternance.romes")
+                problems += await labonnealternance.check(page, offers)
     for problem in problems:
         log(f"problème : {problem}")
     if not problems:
-        log("sélecteurs HelloWork OK")
+        log(f"sites OK : {', '.join(cfg.search.sites)}")
     return not problems
 
 
@@ -289,11 +332,16 @@ async def run(cfg: Config, send: bool, waitCode: bool = False) -> None:
     problem: str | None = "passage interrompu par une erreur"
     try:
         async with WebSkrapClient(default_config=browserConfig(cfg)) as client:
+            # Un seul profil navigateur pour les deux sites : cookies et historique d'envoi conservés.
             session = await client.session("hellowork")
             page = await openPage(session)
-            await page.goto(hellowork.BASE + "/fr-fr/", wait_until="domcontentloaded")
-            await hellowork.dismissCookies(page)
-            found = await collect(page, cfg, store)
+            found = 0
+            if "hellowork" in cfg.search.sites:
+                await page.goto(hellowork.BASE + "/fr-fr/", wait_until="domcontentloaded")
+                await hellowork.dismissCookies(page)
+                found += await collect(page, cfg, store)
+            if labonnealternance.SITE in cfg.search.sites:
+                found += collectLba(cfg, store)
             score(cfg, store)
             if send:
                 otp = codeWaiter(cfg.dataDir / "otp.txt") if waitCode else None
@@ -364,8 +412,12 @@ def retry(store: Store, ids: list[str]) -> None:
     for offerId in ids:
         status = store.retry(offerId)
         print(f"{offerId} : {status}" if status else f"{offerId} : introuvable, ou ni failed ni needs_review")
-    # « Mes candidatures » est relu avant chaque envoi : une offre déjà partie n'est pas renvoyée.
-    print("Vérifiez votre espace HelloWork avant `run --send` pour les offres needs_review.")
+    # « Mes candidatures » (HelloWork) et l'historique du navigateur (La bonne alternance) sont relus
+    # avant chaque envoi : une offre déjà partie n'est pas renvoyée.
+    print(
+        "Avant `run --send`, vérifiez les offres needs_review : espace HelloWork,"
+        " ou emails de confirmation de La bonne alternance."
+    )
 
 
 def outcome(store: Store, offerId: str, value: str) -> None:
@@ -409,12 +461,12 @@ def main() -> None:
         help="si HelloWork demande le code reçu par email, l'attendre dans data/otp.txt (15 min)",
     )
     sub.add_parser("status", help="nombre d'offres par statut")
-    sub.add_parser("check", help="vérifier les sélecteurs HelloWork, sans rien envoyer")
+    sub.add_parser("check", help="vérifier les sites choisis, sans rien envoyer")
     sub.add_parser("review", help="relire les lettres prêtes : garder, modifier ou refuser")
     retryP = sub.add_parser("retry", help="remettre des offres failed ou needs_review dans la file d'envoi")
-    retryP.add_argument("ids", nargs="+", metavar="ID", help="identifiant HelloWork de l'offre")
+    retryP.add_argument("ids", nargs="+", metavar="ID", help="identifiant de l'offre")
     outcomeP = sub.add_parser("outcome", help="noter la réponse du recruteur à une candidature envoyée")
-    outcomeP.add_argument("id", metavar="ID", help="identifiant HelloWork de l'offre")
+    outcomeP.add_argument("id", metavar="ID", help="identifiant de l'offre")
     outcomeP.add_argument("value", choices=OUTCOMES, help="réponse du recruteur")
     dashP = sub.add_parser("dashboard", help="écrire le tableau de bord HTML des statistiques")
     dashP.add_argument("--out", type=Path, help="fichier de sortie (défaut : data/dashboard.html)")

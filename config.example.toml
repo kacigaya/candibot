@@ -12,6 +12,9 @@ rhythm = ""                 # alternance seulement, ex. "3 jours en entreprise, 
 availability = ""           # ex. "dès maintenant"
 
 [search]
+# Sites de recherche, un ou plusieurs parmi : "hellowork", "labonnealternance".
+# "labonnealternance" : alternance seulement, réglages dans [labonnealternance].
+sites = ["hellowork"]
 queries = ["marketing communication", "marketing digital", "communication digitale"]
 location = "Île-de-France"
 # Types de contrat recherchés, un ou plusieurs parmi : "CDI", "CDD", "Intérim",
@@ -35,6 +38,13 @@ exclude_companies = [
     "School", "CFA", "École", "Ecole", "Campus",
 ]
 
+[labonnealternance]
+# Utilisé seulement si search.sites contient "labonnealternance". Clé d'API : LBA_API_KEY dans .env.
+# L'API cherche par métier (code ROME), pas par mots-clés. Liste des codes :
+# https://www.francetravail.fr/candidat/decouvrir-le-marche-du-travail/les-fiches-metiers.html
+romes = []                  # ex. ["E1103", "M1705"] (communication, marketing)
+departements = []           # ex. ["75", "92", "93", "94"] ; vide : toute la France
+
 [answers]
 # Réponses aux questions complémentaires des recruteurs (listes déroulantes et champs libres).
 # Une réponse vide (ou un salaire à 0) laisse la question sans réponse : l'offre
@@ -47,6 +57,7 @@ availability = "immédiate"
 salary_monthly = 0          # ex. 1867.02
 salary_text = ""            # ex. "100 % du SMIC"
 # Numéro donné aux recruteurs qui le demandent. Vide : ces offres passent en needs_review.
+# Obligatoire avec La bonne alternance, dont le formulaire l'exige.
 phone = ""                  # ex. "06 12 34 56 78"
 
 [llm]

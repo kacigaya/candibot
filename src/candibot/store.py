@@ -1,4 +1,4 @@
-"""Suivi des offres en SQLite : une ligne par offre HelloWork, jamais traitée deux fois."""
+"""Suivi des offres en SQLite : une ligne par offre, jamais traitée deux fois."""
 
 import sqlite3
 from datetime import UTC, datetime, timedelta
@@ -13,7 +13,7 @@ from candibot.hellowork import Offer
 #   external -> rejected       notée trop basse ou entreprise exclue (sinon reste external, notée)
 #   new -> drafted             lettre prête, en attente d'envoi
 #   drafted -> rejected        lettre refusée avec `candibot review`
-#   drafted -> applied         candidature confirmée par HelloWork
+#   drafted -> applied         candidature confirmée par le site
 #   drafted -> needs_review    étape imprévue ou erreur après un clic d'envoi : capture à vérifier
 #   drafted -> needs_review    posé avant chaque envoi : un arrêt brutal ne cause pas de doublon
 #   drafted -> failed          erreur technique avant tout clic d'envoi : rien n'est parti
@@ -44,13 +44,15 @@ CREATE TABLE IF NOT EXISTS offers (
     seen_at     TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
     query       TEXT,
-    outcome     TEXT
+    outcome     TEXT,
+    site        TEXT
 )
 """
 # Colonnes ajoutées après la première version : ajoutées en place aux bases existantes.
 # `query` : requête qui a trouvé l'offre en premier (NULL pour les offres plus anciennes).
 # `outcome` : réponse du recruteur (OUTCOMES), NULL tant qu'aucune n'est saisie.
-ADDED_COLUMNS = ("query", "outcome")
+# `site` : site de l'offre (config.SITES) ; les offres plus anciennes viennent toutes de HelloWork.
+ADDED_COLUMNS = ("query", "outcome", "site")
 
 # Issue de chaque passage, pour l'alerte après plusieurs échecs d'affilée.
 RUNS_SCHEMA = """
@@ -80,6 +82,8 @@ class Store:
             for name in ADDED_COLUMNS:
                 if name not in columns:
                     self.db.execute(f"ALTER TABLE offers ADD COLUMN {name} TEXT")
+                    if name == "site":
+                        self.db.execute("UPDATE offers SET site = 'hellowork'")
             self.db.commit()
         except BaseException:
             self.db.rollback()
@@ -97,8 +101,8 @@ class Store:
         with self.db:
             self.db.execute(
                 "INSERT OR IGNORE INTO offers"
-                " (id, url, title, company, location, description, on_site, status, seen_at, updated_at, query)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " (id, url, title, company, location, description, on_site, status, seen_at, updated_at, query, site)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     offer.id,
                     offer.url,
@@ -111,6 +115,7 @@ class Store:
                     now,
                     now,
                     query,
+                    offer.site,
                 ),
             )
 

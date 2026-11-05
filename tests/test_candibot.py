@@ -610,6 +610,7 @@ def testStoreAddsNewColumnsToAnOldDatabase(tmp_path):
     assert store.offers()[0]["query"] is None and store.offers()[0]["outcome"] is None
     store.add(hellowork.parseOffer("1", offerPage()), "community manager")
     assert [r["query"] for r in store.offers() if r["id"] == "1"] == ["community manager"]
+    assert {r["id"]: r["site"] for r in store.offers()} == {"9": "hellowork", "1": "hellowork"}
     store.close()
 
 
@@ -741,4 +742,124 @@ def testDuplicatesDoNotUseTheBudgetOfNewOffers(tmp_path, monkeypatch):
     cfg.candidate = cfg.models = None
     cli.score(cfg, store)
     assert store.counts() == {"applied": 1, "rejected": 1, "drafted": 1}
+    store.close()
+
+
+LBA_JOB = {
+    "identifier": {"id": "6687165396d5", "partner_label": "France Travail", "partner_job_id": "1 9AB"},
+    "workplace": {
+        "name": "ACME",
+        "brand": None,
+        "legal_name": "ACME SAS",
+        "location": {"address": "20 AVENUE DE SEGUR 75007 PARIS"},
+    },
+    "apply": {"url": "https://labonnealternance.apprentissage.beta.gouv.fr/x", "recipient_id": "r1"},
+    "offer": {
+        "title": " Chargé de communication ",
+        "description": "<p>Animer les réseaux</p>",
+        "desired_skills": ["Rigueur"],
+        "to_be_acquired_skills": [],
+        "access_conditions": [],
+        "to_applicant_questions": None,
+    },
+    "is_delegated": True,
+}
+
+
+def testParseJobBuildsAnOfferFromTheApi():
+    from candibot import labonnealternance
+
+    offer = labonnealternance.parseJob(LBA_JOB)
+    assert offer.id == "lba-6687165396d5"
+    assert (
+        offer.url
+        == "https://labonnealternance.apprentissage.beta.gouv.fr/emploi/offres_emploi_partenaires/6687165396d5/offre"
+    )
+    assert (offer.title, offer.company, offer.site) == (
+        "Chargé de communication",
+        "ACME",
+        "labonnealternance",
+    )
+    assert offer.onSite and offer.location == "20 AVENUE DE SEGUR 75007 PARIS"
+    assert "Animer les réseaux\n\nCompétences attendues :\n- Rigueur" in offer.description
+    assert "CFA partenaire" in offer.description
+
+
+def testLbaOffersWithoutSimplifiedFormStayManual():
+    from candibot import labonnealternance
+
+    noForm = {**LBA_JOB, "apply": {"url": "https://example.com", "recipient_id": None}}
+    questions = {**LBA_JOB, "offer": {**LBA_JOB["offer"], "to_applicant_questions": ["Pourquoi nous ?"]}}
+    noId = {
+        **LBA_JOB,
+        "identifier": {"id": None, "partner_label": "France Travail", "partner_job_id": "1 9AB"},
+    }
+    for job in (noForm, questions, noId):
+        assert not labonnealternance.parseJob(job).onSite
+    assert "- Pourquoi nous ?" in labonnealternance.parseJob(questions).description
+    offer = labonnealternance.parseJob(noId)
+    assert (offer.id, offer.url) == (
+        "lba-France_Travail-1_9AB",
+        "https://labonnealternance.apprentissage.beta.gouv.fr/x",
+    )
+    native = {**LBA_JOB, "identifier": {**LBA_JOB["identifier"], "partner_label": "offres_emploi_lba"}}
+    assert "/emploi/offres_emploi_lba/6687165396d5/" in labonnealternance.parseJob(native).url
+
+
+def testLbaSearchParamsRepeatDepartements():
+    from urllib.parse import parse_qs
+
+    from candibot import labonnealternance
+
+    params = parse_qs(labonnealternance.searchParams(("E1103", "M1705"), ("75", "92")))
+    assert params == {"romes": ["E1103,M1705"], "departements": ["75", "92"]}
+
+
+def testConfigChecksSitesAndLbaSettings(tmp_path):
+    from candibot.config import load
+
+    assert load(writeConfig(tmp_path, 'contracts = ["CDI"]')).search.sites == ("hellowork",)
+    lba = 'contracts = ["Alternance"]\nsites = ["labonnealternance"]\n'
+    section = '[answers]\nphone = "0600000000"\n[labonnealternance]\nromes = ["e1103"]\ndepartements = ["75"]'
+    cfg = load(writeConfig(tmp_path, lba + section))
+    assert cfg.search.sites == ("labonnealternance",)
+    assert (cfg.lba.romes, cfg.lba.departements) == (("E1103",), ("75",))
+    bad = {
+        'contracts = ["CDI"]\nsites = ["indeed"]': "search.sites",
+        'contracts = ["CDI"]\nsites = ["labonnealternance"]\n' + section: "Alternance",
+        lba + '[answers]\nphone = "06"\n[labonnealternance]\nromes = ["marketing"]': "codes ROME",
+        lba + '[labonnealternance]\nromes = ["E1103"]': "answers.phone",
+    }
+    for text, message in bad.items():
+        with pytest.raises(SystemExit, match=message):
+            load(writeConfig(tmp_path, text))
+
+
+def testSendRoutesLbaOffersToTheApi(tmp_path, monkeypatch):
+    import asyncio
+
+    from candibot import cli, labonnealternance
+
+    store = Store(tmp_path / "db.sqlite")
+    offer = labonnealternance.parseJob(LBA_JOB)
+    store.add(offer)
+    store.scored(offer.id, 9, "bon profil", "Bonjour", minScore=7)
+    store.add(hellowork.parseOffer("1", offerPage()))  # site non choisi : reste en attente
+    store.scored("1", 9, "bon profil", "Bonjour", minScore=7)
+    sent = []
+
+    async def fakeApply(session, page, url, **kwargs):
+        sent.append((url, kwargs["phone"]))
+        return application.ApplyResult("applied", "confirmée")
+
+    monkeypatch.setattr(cli.labonnealternance, "apply", fakeApply)
+    monkeypatch.setattr(cli, "notify", lambda *args: None)
+    cfg = type("Cfg", (), {})()
+    cfg.dataDir = tmp_path
+    cfg.search = Search([], "", ("Alternance",), 1, 7, 1, 5, (0, 0), (), ("labonnealternance",))
+    cfg.candidate = type("C", (), {"firstName": "A", "lastName": "B", "email": "e", "cvPdf": None})()
+    cfg.answers = type("A", (), {"phone": "0600000000"})()
+    asyncio.run(cli.sendApplications(None, None, cfg, store))
+    assert sent == [(offer.url, "0600000000")]
+    assert store.counts() == {"applied": 1, "drafted": 1}
     store.close()

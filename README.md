@@ -5,7 +5,7 @@
 <h1 align="center">candibot</h1>
 
 <p align="center">
-  <strong>Bot de candidature pour HelloWork : CDI, CDD, intérim, stage, alternance…</strong><br>
+  <strong>Bot de candidature pour HelloWork et La bonne alternance : CDI, CDD, intérim, stage, alternance…</strong><br>
   <em>Trouve les offres du type de contrat choisi, les note par rapport à votre CV, rédige un message pour chaque recruteur et peut envoyer la candidature à votre place.</em>
 </p>
 
@@ -20,11 +20,11 @@
 
 ## Fonctionnalités
 
-- Cherche les offres sur HelloWork pour chacune de vos requêtes, filtrées sur les types de contrat choisis (`search.contracts`)
+- Cherche les offres sur les sites choisis (`search.sites`) : HelloWork pour chacune de vos requêtes, filtrées sur les types de contrat choisis (`search.contracts`), et La bonne alternance par son API publique
 - Écarte les offres des écoles, CFA et organismes de formation qui recrutent pour leur propre cursus, avant tout appel au modèle
 - Note chaque offre sur 10 par rapport à votre CV avec un modèle gratuit d'OpenCode, isolé dans bubblewrap
 - Rédige un message de 120 à 200 mots au recruteur, à partir des seuls faits de votre CV
-- Remplit et envoie le formulaire HelloWork étape par étape, avec des mouvements de souris humains (seulement avec `--send`)
+- Remplit et envoie le formulaire HelloWork étape par étape, avec des mouvements de souris humains, ou le formulaire « Candidature simplifiée » de La bonne alternance (seulement avec `--send`)
 - Consulte la page « Mes candidatures » avant et après chaque envoi, pour ne jamais postuler deux fois
 - Répond aux questions courantes des recruteurs : civilité, disponibilité, salaire et téléphone
 - Envoie par email une confirmation par candidature et un récapitulatif du passage, via [AgentMail](https://docs.agentmail.to)
@@ -84,7 +84,7 @@ uv run candibot run
 | `retry ID…` | Remet des offres `failed` ou `needs_review` dans la file d'envoi (`drafted`, ou `new` sans lettre) |
 | `dashboard` | Écrit un tableau de bord HTML dans `data/dashboard.html` : chiffres clés, envois et offres par jour, notes, offres à vérifier, à relancer ou à faire à la main, réponses et résultats par requête. Option `--out` pour un autre fichier. |
 | `outcome ID RÉPONSE` | Note la réponse du recruteur à une candidature envoyée : `relancee`, `entretien`, `refus` ou `acceptee` |
-| `check` | Vérifie les sélecteurs HelloWork : lit une recherche et une fiche, ouvre le formulaire sans le soumettre. Code de sortie 1 en cas de problème. |
+| `check` | Vérifie les sites choisis. HelloWork : lit une recherche et une fiche, ouvre le formulaire sans le soumettre. La bonne alternance : lance une recherche par l'API, puis ouvre un formulaire sans le soumettre. Code de sortie 1 en cas de problème. |
 
 ### Tableau de bord
 
@@ -101,6 +101,21 @@ Le tableau « Par requête » montre, pour chaque requête de `search.queries`, 
 2. Après une relance de votre part, lancez `uv run candibot outcome ID relancee`.
 
 Une candidature envoyée depuis 14 jours ou plus, sans réponse notée, apparaît dans « À relancer » : dans le récapitulatif email et dans le tableau de bord. L'identifiant `ID` y figure.
+
+### La bonne alternance
+
+[La bonne alternance](https://labonnealternance.apprentissage.beta.gouv.fr/) est le service public des offres d'alternance. candibot cherche les offres par son [API](https://api.apprentissage.beta.gouv.fr/fr/documentation-technique), puis envoie la candidature par le formulaire « Candidature simplifiée » du site, dans le navigateur. Ce formulaire ne demande pas de compte. Ce site publie seulement des offres d'alternance.
+
+1. Créez un compte sur l'[espace développeurs](https://api.apprentissage.beta.gouv.fr/), puis une clé d'API.
+2. Ajoutez la clé à `.env` sur une ligne `LBA_API_KEY=…`. Utilisez la même méthode que pour la clé AgentMail (voir « Récapitulatif par email »).
+3. Dans `config.toml`, ajoutez `"labonnealternance"` à `search.sites` et `"Alternance"` à `search.contracts`.
+4. Remplissez `labonnealternance.romes` avec les codes ROME de vos métiers. L'API ne cherche pas par mots-clés. Trouvez les codes dans les [fiches métiers de France Travail](https://www.francetravail.fr/candidat/decouvrir-le-marche-du-travail/les-fiches-metiers.html).
+5. Remplissez `answers.phone`. Le formulaire l'exige pour chaque candidature.
+6. Lancez `uv run candibot check`.
+
+Une clé « production » suffit : la recherche ne demande aucune habilitation. N'utilisez pas de clé « sandbox » : elle renvoie des offres de test.
+
+Les offres sans « Candidature simplifiée » passent en `external`. C'est aussi le cas des offres avec des questions du recruteur, car le formulaire exige une réponse à chacune. La bonne alternance transmet la candidature au recruteur par email, avec votre CV et votre message, et vous envoie un email de confirmation. La preuve d'envoi est le message « Votre candidature a bien été envoyée » du site. Le site garde la date d'envoi dans le profil navigateur `data/browser/` : candibot ne renvoie pas une offre déjà envoyée depuis ce profil. Le site limite aussi le nombre de candidatures par jour et par offre.
 
 ### Première candidature
 
@@ -134,10 +149,10 @@ Ces emails vous sont destinés. candibot n'écrit jamais aux recruteurs.
 
 ## Fonctionnement
 
-1. **Recherche.** Pour chaque requête, candibot lit les résultats HelloWork filtrés sur les contrats de `search.contracts` (par exemple `["CDI", "CDD"]`), puis ouvre chaque nouvelle offre. La fiche contient un bloc JSON-LD `JobPosting`, sauf pour les offres anonymes, lues dans le HTML.
+1. **Recherche.** Pour chaque requête, candibot lit les résultats HelloWork filtrés sur les contrats de `search.contracts` (par exemple `["CDI", "CDD"]`), puis ouvre chaque nouvelle offre. La fiche contient un bloc JSON-LD `JobPosting`, sauf pour les offres anonymes, lues dans le HTML. Sur La bonne alternance, une seule recherche par l'API couvre tous les codes de `labonnealternance.romes`. Elle renvoie 150 offres au plus par source.
 2. **Filtrage.** Les offres des entreprises de `search.exclude_companies` sont écartées sans appel au modèle. Ce sont surtout des écoles qui publient des offres pour recruter des étudiants dans leurs cursus. Elles forment la majorité des offres d'alternance et de stage sur HelloWork.
 3. **Notation.** Un modèle OpenCode (`llm.models`, essayés dans l'ordre) note l'offre et rédige le message à partir de `data/cv.md`. Une lettre qui contient des caractères hors alphabet latin est refusée et confiée au modèle suivant.
-4. **Envoi** (seulement avec `--send`). candibot remplit l'identité, le CV, le message et les CGU, puis avance d'étape en étape. Il s'arrête en `needs_review`, avec une capture d'écran de chaque étape, si une étape contient un champ obligatoire qu'il ne sait pas remplir ou si la candidature n'apparaît pas dans « Mes candidatures ».
+4. **Envoi** (seulement avec `--send`). Sur La bonne alternance, candibot remplit l'identité, le téléphone, le CV et le message, puis attend le message de confirmation. Sur HelloWork, il remplit l'identité, le CV, le message et les CGU, puis avance d'étape en étape. Il s'arrête en `needs_review`, avec une capture d'écran de chaque étape, si une étape contient un champ obligatoire qu'il ne sait pas remplir ou si la candidature n'apparaît pas dans « Mes candidatures ».
 5. **Compte rendu.** Un email par candidature `applied` ou `needs_review`, avec l'offre et le message envoyé, puis le récapitulatif du passage. Chaque envoi porte une clé d'idempotence : un nouvel essai du même passage n'envoie pas de doublon.
 
 Chaque offre n'est traitée qu'une fois. Le suivi est stocké dans `data/candibot.db`. Les offres qui renvoient vers le site du recruteur (`external`) sont notées aussi, avec le budget de `max_scored` qui reste après les nouvelles offres. Une note sous `min_score` les écarte. Les autres sont listées dans le récapitulatif avec leur lettre, pour une candidature à la main.
@@ -167,8 +182,8 @@ Ce contrôle a lieu avant la notation et avant chaque envoi. Les doublons écart
 | `rejected` | Note inférieure à `min_score`, entreprise exclue ou annonce d'école |
 | `external` | Candidature uniquement sur le site du recruteur. Notée et accompagnée d'une lettre, à envoyer à la main. |
 | `drafted` | Lettre prête, en attente de `--send` |
-| `applied` | Candidature confirmée dans « Mes candidatures » |
-| `needs_review` | Envoi non confirmé. Vérifiez `data/shots/<id>.png` et votre espace HelloWork, puis relancez avec `candibot retry <id>`. |
+| `applied` | Candidature confirmée dans « Mes candidatures » (HelloWork) ou confirmée par le formulaire (La bonne alternance) |
+| `needs_review` | Envoi non confirmé. Vérifiez `data/shots/<id>.png` et votre espace HelloWork, ou vos emails de La bonne alternance, puis relancez avec `candibot retry <id>`. |
 | `failed` | Erreur technique avant tout envoi : rien n'est parti. `candibot retry <id>` la remet dans la file. |
 
 ## Passage quotidien
@@ -224,7 +239,7 @@ Un passage échoue s'il ne trouve aucune offre dans les résultats, ou si, avec 
 
 ## Développement
 
-`tests/test_apply_browser.py` parcourt le formulaire de candidature dans Chromium, contre des pages HelloWork simulées, sans réseau. Il faut le Chromium de Patchright.
+`tests/test_apply_browser.py` et `tests/test_apply_lba_browser.py` parcourent les formulaires de candidature dans Chromium, contre des pages HelloWork et La bonne alternance simulées, sans réseau. Il faut le Chromium de Patchright.
 
 Le nommage suit une convention propre au projet (camelCase), vérifiée par `tests/test_naming.py`. Voir [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -239,6 +254,8 @@ uv run ruff format --check .
 ## Limites
 
 - Les sélecteurs HelloWork ont été vérifiés le 22/10/2026. Lancez `uv run candibot check` pour les revérifier. Si le site change, corrigez-les dans [`src/candibot/hellowork.py`](src/candibot/hellowork.py) (recherche et fiches) ou [`src/candibot/application.py`](src/candibot/application.py) (formulaire).
+- Les sélecteurs de La bonne alternance ont été vérifiés le 05/11/2026, sur le site et dans son [code source](https://github.com/mission-apprentissage/labonnealternance). S'il change, corrigez-les dans [`src/candibot/labonnealternance.py`](src/candibot/labonnealternance.py).
+- Le contrôle des doublons compare le titre, l'entreprise et le lieu. Les deux sites n'écrivent pas le lieu de la même façon : une offre publiée sur les deux sites peut recevoir deux candidatures. Si vous choisissez les deux sites, relisez les lettres avec `candibot review`.
 - « Mes candidatures » n'affiche pas l'identifiant de l'offre. La correspondance se fait donc sur le titre et l'entreprise d'une même carte. Seule la première page (les plus récentes) est lue.
 
 ## Avertissement
